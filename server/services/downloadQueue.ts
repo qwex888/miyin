@@ -7,6 +7,7 @@ import {
   constants,
   statSync,
   writeFileSync,
+  renameSync,
 } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
@@ -19,6 +20,7 @@ import { getSource, listEnabledOkSources } from './sourceRegistry'
 import { loadLxSource, pickQuality } from './sourceRuntime'
 import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
+import { sniffAudioExt } from '../utils/audioSniff'
 import { nextStatusAfterFailure, isRetryableError } from './downloadState'
 
 export type { TaskStatus } from './downloadState'
@@ -281,22 +283,37 @@ export function batchRetryTasks(ids: string[], opts?: { resetAttempts?: boolean 
 }
 
 /**
- * 失败任务换源重试：切换到同平台其它可用音源并重新入队。
- * 会记录已尝试音源，多次点击依次轮换。
+ * 失败任务换源重试：切换到指定音源（或同平台可用源中的下一个）并重新入队。
  */
-export function switchSourceAndRetry(id: string) {
+export function switchSourceAndRetry(id: string, opts?: { sourceId?: string }) {
   const task = getTask(id)
   if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
   if (task.status === 'running' || task.status === 'queued') {
     throw createError({ statusCode: 400, statusMessage: '任务进行中，请先取消再换源' })
   }
 
-  const alts = listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
-  if (!alts.length) {
+  const available = listEnabledOkSources(task.platform)
+  if (!available.length) {
     throw createError({
       statusCode: 400,
-      statusMessage: `没有可用备源（平台 ${task.platform}）`,
+      statusMessage: `没有可用音源（平台 ${task.platform}）`,
     })
+  }
+
+  let next = opts?.sourceId ? available.find((s) => s.id === opts.sourceId) : undefined
+  if (opts?.sourceId && !next) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: '指定音源不可用或不支持该平台',
+    })
+  }
+  if (!next) {
+    // 兼容未传 sourceId：排除当前源后轮换
+    const alts = available.filter((s) => s.id !== task.source_id)
+    next = (alts.length ? alts : available)[0]
+  }
+  if (!next) {
+    throw createError({ statusCode: 400, statusMessage: `没有可用音源（平台 ${task.platform}）` })
   }
 
   let musicInfo: Record<string, any> = {}
@@ -309,9 +326,6 @@ export function switchSourceAndRetry(id: string) {
     ? musicInfo.__triedSources.filter((x: unknown) => typeof x === 'string')
     : []
   if (task.source_id && !tried.includes(task.source_id)) tried.push(task.source_id)
-
-  const unused = alts.filter((s) => !tried.includes(s.id))
-  const next = (unused.length ? unused : alts)[0]!
   const nextTried = [...new Set([...tried, next.id])]
 
   removeTaskFiles(task)
@@ -340,11 +354,16 @@ export function switchSourceAndRetry(id: string) {
   }
 }
 
-export function batchSwitchSourceAndRetry(ids: string[]) {
+/** 批量换源：可统一 sourceId，或按任务指定 sourceById */
+export function batchSwitchSourceAndRetry(
+  ids: string[],
+  opts?: { sourceId?: string; sourceById?: Record<string, string> },
+) {
   const items = []
   for (const id of ids) {
     try {
-      items.push(switchSourceAndRetry(id))
+      const sourceId = opts?.sourceById?.[id] || opts?.sourceId
+      items.push(switchSourceAndRetry(id, sourceId ? { sourceId } : undefined))
     } catch (e: any) {
       items.push({ id, error: e?.statusMessage || e?.message || String(e) })
     }
@@ -466,6 +485,9 @@ async function processTask(task: DownloadTaskRow) {
 
     if (cancelSet.has(task.id)) throw new Error('cancelled')
 
+    // 按文件魔数纠正扩展名，避免「标称 flac、实为 mp3」导致元数据写入失败
+    filePath = alignFileExtension(filePath, base, dir)
+
     let fileSize: number | null = null
     try {
       fileSize = statSync(filePath).size
@@ -584,10 +606,33 @@ async function processTask(task: DownloadTaskRow) {
 
 function guessExt(url: string, quality: string) {
   const u = url.toLowerCase()
-  if (u.includes('.flac') || quality === 'flac') return 'flac'
-  if (u.includes('.m4a')) return 'm4a'
-  if (u.includes('.ape')) return 'ape'
+  // 优先看明确后缀；quality=flac 仅作弱提示（下载后会再嗅探纠正）
+  if (/\.flac(?:\?|#|$)/i.test(u) || quality === 'flac') return 'flac'
+  if (/\.m4a(?:\?|#|$)/i.test(u)) return 'm4a'
+  if (/\.ape(?:\?|#|$)/i.test(u)) return 'ape'
+  if (/\.ogg(?:\?|#|$)/i.test(u)) return 'ogg'
+  if (/\.wav(?:\?|#|$)/i.test(u)) return 'wav'
+  if (/\.mp3(?:\?|#|$)/i.test(u)) return 'mp3'
   return 'mp3'
+}
+
+/** 若魔数与扩展名不一致则重命名到正确后缀 */
+function alignFileExtension(filePath: string, base: string, dir: string): string {
+  const sniffed = sniffAudioExt(filePath)
+  if (!sniffed) return filePath
+  const cur = filePath.includes('.') ? filePath.split('.').pop()!.toLowerCase() : ''
+  if (cur === sniffed) return filePath
+  const next = join(dir, `${base}.${sniffed}`)
+  if (next === filePath) return filePath
+  try {
+    if (existsSync(next) && next !== filePath) unlinkSync(next)
+    renameSync(filePath, next)
+    console.warn(`[download] 扩展名已纠正: .${cur || '?'} → .${sniffed}`)
+    return next
+  } catch (e: any) {
+    console.warn('[download] 扩展名纠正失败:', e?.message || e)
+    return filePath
+  }
 }
 
 export async function tickWorker() {

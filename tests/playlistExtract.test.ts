@@ -15,6 +15,14 @@ describe('extractNeteasePlaylistId', () => {
     expect(extractNeteasePlaylistId('https://music.163.com/playlist/123456789')).toBe('123456789')
     expect(extractNeteasePlaylistId('123456789')).toBe('123456789')
   })
+
+  it('parses mobile playlist url', () => {
+    expect(
+      extractNeteasePlaylistId(
+        'https://music.163.com/m/playlist?id=359474091&creatorId=263582598',
+      ),
+    ).toBe('359474091')
+  })
 })
 
 describe('extractQqPlaylistId', () => {

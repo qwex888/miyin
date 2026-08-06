@@ -28,6 +28,10 @@ export type PlaylistDraft = {
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+/** 移动端 UA：网易云 PC 端 playlist/detail 常只返回少量 tracks，完整列表在 trackIds */
+const WY_MOBILE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 CloudMusic/8.9.10'
+
 const QQ_HEADERS = {
   'User-Agent': UA,
   Referer: 'https://y.qq.com/',
@@ -510,31 +514,87 @@ export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
 }
 
 async function parseNeteasePlaylist(id: string, url: string): Promise<PlaylistDraft> {
-  const api = `https://music.163.com/api/v6/playlist/detail?id=${id}&n=1000`
+  // 移动端头 + n 放大；完整曲目 ID 在 trackIds，tracks 往往只有预览几首
+  const api = `https://music.163.com/api/v6/playlist/detail?id=${id}&n=100000&s=0`
   const res = await fetchWithTimeout(api, {
     headers: {
-      'User-Agent': UA,
-      Referer: 'https://music.163.com/',
+      'User-Agent': WY_MOBILE_UA,
+      Referer: 'https://music.163.com/m/',
     },
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
+  if (data?.code && data.code !== 200) {
+    throw createError({
+      statusCode: 502,
+      statusMessage: `网易云歌单接口失败(${data.code}): ${data.msg || data.message || 'unknown'}`,
+    })
+  }
   const pl = data?.playlist
   if (!pl) throw createError({ statusCode: 502, statusMessage: '歌单不存在或接口失败' })
-  const tracks: PlaylistTrackDraft[] = (pl.tracks || []).map((s: any) => ({
-    externalId: String(s.id),
-    title: s.name || '未知',
-    artist: (s.ar || []).map((a: any) => a.name).filter(Boolean).join(' / ') || '未知',
-    album: s.al?.name || '',
-    duration: Math.round((s.dt || 0) / 1000),
-    platform: 'wy',
-  }))
+
+  const previewTracks: PlaylistTrackDraft[] = (pl.tracks || []).map(mapNeteaseSong)
+  const trackIds: string[] = (pl.trackIds || [])
+    .map((t: any) => String(t?.id ?? t))
+    .filter((x: string) => /^\d+$/.test(x))
+
+  let tracks = previewTracks
+  // PC/Web 常见：tracks 仅几首，trackIds 才是完整列表（如「喜欢的音乐」）
+  if (trackIds.length > previewTracks.length) {
+    tracks = await fetchNeteaseSongsByIds(trackIds)
+    if (!tracks.length && previewTracks.length) tracks = previewTracks
+  }
+
+  if (!tracks.length) {
+    throw createError({ statusCode: 502, statusMessage: '歌单曲目为空或无法解析' })
+  }
+
   return {
     platform: 'wy',
     title: pl.name || `歌单 ${id}`,
     url,
     tracks,
   }
+}
+
+function mapNeteaseSong(s: any): PlaylistTrackDraft {
+  const artists = s.ar || s.artists || []
+  return {
+    externalId: String(s.id),
+    title: s.name || '未知',
+    artist: artists.map((a: any) => a.name).filter(Boolean).join(' / ') || '未知',
+    album: s.al?.name || s.album?.name || '',
+    duration: Math.round((s.dt || s.duration || 0) / 1000),
+    platform: 'wy',
+  }
+}
+
+/** 按 trackIds 分批拉取歌曲详情（对齐移动端补全歌单） */
+async function fetchNeteaseSongsByIds(ids: string[]): Promise<PlaylistTrackDraft[]> {
+  const BATCH = 200
+  const byId = new Map<string, PlaylistTrackDraft>()
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const batch = ids.slice(i, i + BATCH)
+    const c = JSON.stringify(batch.map((sid) => ({ id: Number(sid) })))
+    const api = `https://music.163.com/api/v3/song/detail?c=${encodeURIComponent(c)}`
+    const res = await fetchWithTimeout(api, {
+      headers: {
+        'User-Agent': WY_MOBILE_UA,
+        Referer: 'https://music.163.com/',
+      },
+    })
+    if (!res.ok) throw new Error(`song/detail HTTP ${res.status}`)
+    const data = await res.json()
+    if (data?.code !== 200 || !Array.isArray(data.songs)) {
+      throw new Error(data?.msg || data?.message || 'song/detail 失败')
+    }
+    for (const s of data.songs) {
+      const row = mapNeteaseSong(s)
+      if (row.externalId) byId.set(row.externalId, row)
+    }
+  }
+  // 保持歌单原有顺序
+  return ids.map((sid) => byId.get(sid)).filter(Boolean) as PlaylistTrackDraft[]
 }
 
 export type PlaylistMatchRow = {

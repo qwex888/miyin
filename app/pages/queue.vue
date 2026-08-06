@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { SwitchSourceOption } from '~/composables/useSwitchSourcePreference'
+
 type Task = {
   id: string
   title: string
@@ -28,6 +30,151 @@ let deletePending: null | { mode: 'one'; task: Task } | { mode: 'batch' } = null
 let timer: any
 let es: EventSource | null = null
 
+type SourceRowLite = {
+  id: string
+  name: string
+  enabled: number
+  status: string
+  platforms: string
+}
+
+const switchDialogOpen = ref(false)
+const switchDialogTitle = ref('选择音源')
+const switchDialogDesc = ref('选择后将使用该音源重新下载，并记住为默认选项。')
+const switchOptions = ref<SwitchSourceOption[]>([])
+let switchPending: null | { mode: 'one'; task: Task } | { mode: 'batch'; tasks: Task[] } = null
+
+const {
+  rememberSwitchSource,
+  resolveSourceIdForPlatform,
+} = useSwitchSourcePreference()
+
+function parsePlatforms(raw: string): string[] {
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function toSwitchOptions(rows: SourceRowLite[], platforms: string[]): SwitchSourceOption[] {
+  const want = new Set(platforms)
+  return rows
+    .filter((r) => r.enabled === 1 && r.status === 'ok')
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      platforms: parsePlatforms(r.platforms),
+    }))
+    .filter((o) => o.platforms.some((p) => want.has(p)))
+}
+
+function optionsForPlatform(
+  rows: SourceRowLite[],
+  platform: string,
+): SwitchSourceOption[] {
+  return toSwitchOptions(rows, [platform]).filter((o) => o.platforms.includes(platform))
+}
+
+async function loadOkSources(): Promise<SourceRowLite[]> {
+  const res = await $fetch<{ items: SourceRowLite[] }>('/api/sources')
+  return res.items || []
+}
+
+async function openSwitchForTask(t: Task) {
+  msg.value = ''
+  try {
+    const rows = await loadOkSources()
+    const opts = optionsForPlatform(rows, t.platform)
+    if (!opts.length) {
+      msg.value = `没有可用音源（平台 ${t.platform}）`
+      return
+    }
+    switchPending = { mode: 'one', task: t }
+    switchOptions.value = opts
+    switchDialogTitle.value = '选择音源'
+    switchDialogDesc.value = `为「${t.title}」选择音源后重新下载，并记住为默认选项。`
+    switchDialogOpen.value = true
+  } catch (e: any) {
+    msg.value = e?.data?.statusMessage || e?.message || '加载音源失败'
+  }
+}
+
+async function openSwitchForBatch() {
+  if (!selectedCount.value) return
+  msg.value = ''
+  const tasks = items.value.filter((t) => selected.value.has(t.id))
+  if (!tasks.length) return
+  try {
+    const rows = await loadOkSources()
+    const platforms = [...new Set(tasks.map((t) => t.platform))]
+    const opts = toSwitchOptions(rows, platforms)
+    if (!opts.length) {
+      msg.value = '选中任务没有可用音源'
+      return
+    }
+    switchPending = { mode: 'batch', tasks }
+    switchOptions.value = opts
+    switchDialogTitle.value = '批量换源'
+    switchDialogDesc.value =
+      platforms.length > 1
+        ? `已选 ${tasks.length} 个任务（含 ${platforms.length} 个平台）。优先使用所选音源；不支持的平台将使用该平台已记住的音源。`
+        : `为选中的 ${tasks.length} 个任务选择音源后重新下载，并记住为默认选项。`
+    switchDialogOpen.value = true
+  } catch (e: any) {
+    msg.value = e?.data?.statusMessage || e?.message || '加载音源失败'
+  }
+}
+
+async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSourceOption }) {
+  const pending = switchPending
+  if (!pending) {
+    switchDialogOpen.value = false
+    return
+  }
+  rememberSwitchSource(payload.source)
+  loading.value = true
+  msg.value = ''
+  try {
+    if (pending.mode === 'one') {
+      const res = await $fetch<{ sourceName: string }>(
+        `/api/downloads/${pending.task.id}/switch-source`,
+        { method: 'POST', body: { sourceId: payload.sourceId } },
+      )
+      msg.value = `已切换至音源「${res.sourceName}」并重试`
+    } else {
+      const rows = await loadOkSources()
+      const sourceById: Record<string, string> = {}
+      for (const t of pending.tasks) {
+        const platformOpts = optionsForPlatform(rows, t.platform)
+        const sid = resolveSourceIdForPlatform(t.platform, platformOpts, payload.source)
+        if (sid) sourceById[t.id] = sid
+      }
+      const res = await $fetch<{ items: Array<{ sourceName?: string; error?: string }> }>(
+        '/api/downloads/batch-switch-source',
+        { method: 'POST', body: { ids: pending.tasks.map((t) => t.id), sourceById } },
+      )
+      const ok = res.items.filter((i) => !i.error).length
+      const fail = res.items.length - ok
+      selected.value = new Set()
+      msg.value = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
+    }
+    switchDialogOpen.value = false
+    switchPending = null
+    await load()
+    useDownloadBadge().notifyChanged()
+  } catch (e: any) {
+    msg.value = e?.data?.statusMessage || e?.message || '换源失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function onSwitchCancel() {
+  switchPending = null
+}
+
 const statusMap = {
   running: ['queued', 'running'],
   completed: ['completed'],
@@ -37,11 +184,30 @@ const statusMap = {
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
 
+const tabCounts = computed(() => {
+  const counts = { running: 0, completed: 0, failed: 0 }
+  for (const t of allItems.value) {
+    if (statusMap.running.includes(t.status)) counts.running++
+    else if (statusMap.completed.includes(t.status)) counts.completed++
+    else if (statusMap.failed.includes(t.status)) counts.failed++
+  }
+  return counts
+})
+
 function formatSize(n: number | null | undefined) {
   if (n == null || n <= 0) return ''
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function platformText(platform: string) {
+  return `平台：${platformLabel(platform)}`
+}
+
+function qualityText(quality: string | null | undefined) {
+  if (!quality) return ''
+  return `音质：${qualityLabel(quality)}`
 }
 
 function progressPct(t: Task) {
@@ -62,7 +228,19 @@ function statusText(s: string) {
 
 function applyFilter() {
   const allow = statusMap[tab.value]
-  items.value = allItems.value.filter((t) => allow.includes(t.status))
+  let list = allItems.value.filter((t) => allow.includes(t.status))
+  if (tab.value === 'running') {
+    // 下载中（有进度）在前，排队等待在后；同组内进度高的靠前
+    list = [...list].sort((a, b) => {
+      const rank = (t: Task) => (t.status === 'running' ? 0 : t.status === 'queued' ? 1 : 2)
+      const ra = rank(a)
+      const rb = rank(b)
+      if (ra !== rb) return ra - rb
+      if (ra === 0) return (b.progress || 0) - (a.progress || 0)
+      return 0
+    })
+  }
+  items.value = list
   const ids = new Set(items.value.map((t) => t.id))
   selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
 }
@@ -134,27 +312,13 @@ async function cancel(t: Task) {
 
 async function retry(t: Task) {
   await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
-  tab.value = 'running'
+  // 留在失败 tab，刷新后该条会从当前列表消失
   await load()
   useDownloadBadge().notifyChanged()
 }
 
 async function switchSource(t: Task) {
-  loading.value = true
-  msg.value = ''
-  try {
-    const res = await $fetch<{ sourceName: string }>(`/api/downloads/${t.id}/switch-source`, {
-      method: 'POST',
-    })
-    tab.value = 'running'
-    msg.value = `已切换至音源「${res.sourceName}」并重试`
-    await load()
-    useDownloadBadge().notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '换源失败'
-  } finally {
-    loading.value = false
-  }
+  await openSwitchForTask(t)
 }
 
 async function deleteOne(t: Task) {
@@ -246,7 +410,6 @@ async function batchRetry() {
       body: { ids: [...selected.value], resetAttempts: true },
     })
     selected.value = new Set()
-    tab.value = 'running'
     msg.value = '已批量重试'
     await load()
     useDownloadBadge().notifyChanged()
@@ -258,26 +421,7 @@ async function batchRetry() {
 }
 
 async function batchSwitchSource() {
-  if (!selectedCount.value) return
-  if (!confirm(`确认对选中的 ${selectedCount.value} 个任务换源并重试？`)) return
-  loading.value = true
-  try {
-    const res = await $fetch<{ items: Array<{ sourceName?: string; error?: string }> }>(
-      '/api/downloads/batch-switch-source',
-      { method: 'POST', body: { ids: [...selected.value] } },
-    )
-    const ok = res.items.filter((i) => !i.error).length
-    const fail = res.items.length - ok
-    selected.value = new Set()
-    tab.value = 'running'
-    msg.value = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
-    await load()
-    useDownloadBadge().notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '批量换源失败'
-  } finally {
-    loading.value = false
-  }
+  await openSwitchForBatch()
 }
 
 watch(tab, () => {
@@ -295,7 +439,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-queue">
     <div class="tabs">
       <button
         type="button"
@@ -304,6 +448,7 @@ onBeforeUnmount(() => {
         @click="tab = 'running'"
       >
         进行中
+        <span class="tab-count">({{ tabCounts.running }})</span>
       </button>
       <button
         type="button"
@@ -312,9 +457,11 @@ onBeforeUnmount(() => {
         @click="tab = 'completed'"
       >
         已完成
+        <span class="tab-count">({{ tabCounts.completed }})</span>
       </button>
       <button type="button" class="tab" :class="{ active: tab === 'failed' }" @click="tab = 'failed'">
         失败
+        <span class="tab-count">({{ tabCounts.failed }})</span>
       </button>
     </div>
 
@@ -349,100 +496,102 @@ onBeforeUnmount(() => {
     </div>
     <p v-if="msg" class="tip">{{ msg }}</p>
 
-    <VirtualList
-      v-if="items.length"
-      :key="tab"
-      :items="items"
-      :estimate-size="80"
-      max-height="calc(100vh - 220px)"
-    >
-      <template #default="{ item: t }">
-        <div class="task">
-          <label class="task-check">
-            <input
-              type="checkbox"
-              :checked="selected.has(t.id)"
-              @change="toggleOne(t.id, ($event.target as HTMLInputElement).checked)"
-            />
-          </label>
+    <div class="list-pane">
+      <VirtualList
+        v-if="items.length"
+        :key="tab"
+        :items="items"
+        :estimate-size="88"
+        fill
+      >
+        <template #default="{ item: t }">
+          <div class="task">
+            <label class="task-check">
+              <input
+                type="checkbox"
+                :checked="selected.has(t.id)"
+                @change="toggleOne(t.id, ($event.target as HTMLInputElement).checked)"
+              />
+            </label>
 
-          <div class="task-main">
-            <div class="task-top">
-              <div class="task-title" :title="`${t.title} · ${t.artist}`">
-                <span class="name">{{ t.title }}</span>
-                <span class="sep">·</span>
-                <span class="artist">{{ t.artist }}</span>
+            <div class="task-main">
+              <div class="task-top">
+                <div class="task-title" :title="`${t.title} · ${t.artist}`">
+                  <span class="name">{{ t.title }}</span>
+                  <span class="sep">·</span>
+                  <span class="artist">{{ t.artist }}</span>
+                </div>
+                <span class="badge" :class="`badge-${t.status}`">{{ statusText(t.status) }}</span>
               </div>
-              <span class="badge" :class="`badge-${t.status}`">{{ statusText(t.status) }}</span>
-            </div>
 
-            <div class="task-meta">
-              <span>{{ t.platform }}</span>
-              <span v-if="t.quality">{{ t.quality }}</span>
-              <span v-if="t.file_size">{{ formatSize(t.file_size) }}</span>
-              <span v-if="t.attempts">尝试 {{ t.attempts }}</span>
-            </div>
-
-            <div v-if="t.status === 'running' || t.status === 'queued'" class="progress">
-              <div class="progress-track">
-                <div class="progress-fill" :style="{ width: `${progressPct(t)}%` }" />
+              <div class="task-meta">
+                <span>{{ platformText(t.platform) }}</span>
+                <span v-if="t.quality">{{ qualityText(t.quality) }}</span>
+                <span v-if="t.file_size">{{ formatSize(t.file_size) }}</span>
+                <span v-if="t.attempts">尝试 {{ t.attempts }}</span>
               </div>
-              <span class="progress-num">{{ progressPct(t) }}%</span>
+
+              <div v-if="t.status === 'running' || t.status === 'queued'" class="progress">
+                <div class="progress-track">
+                  <div class="progress-fill" :style="{ width: `${progressPct(t)}%` }" />
+                </div>
+                <span class="progress-num">{{ progressPct(t) }}%</span>
+              </div>
+
+              <p v-if="t.error" class="task-err" :title="t.error">{{ t.error }}</p>
+              <p v-else-if="t.file_path" class="task-path" :title="t.file_path">{{ t.file_path }}</p>
             </div>
 
-            <p v-if="t.error" class="task-err" :title="t.error">{{ t.error }}</p>
-            <p v-else-if="t.file_path" class="task-path" :title="t.file_path">{{ t.file_path }}</p>
+            <div class="task-ops">
+              <button
+                v-if="t.status === 'queued' || t.status === 'running'"
+                class="btn btn-ghost btn-sm"
+                type="button"
+                @click="cancel(t)"
+              >
+                取消
+              </button>
+              <button
+                v-if="t.status === 'completed'"
+                class="btn btn-ghost btn-sm"
+                type="button"
+                @click="deleteOne(t)"
+              >
+                删除
+              </button>
+              <button
+                v-if="t.status === 'failed' || t.status === 'cancelled'"
+                class="btn btn-ghost btn-sm"
+                type="button"
+                :disabled="loading"
+                @click="retry(t)"
+              >
+                重试
+              </button>
+              <button
+                v-if="t.status === 'failed' || t.status === 'cancelled'"
+                class="btn btn-sm"
+                type="button"
+                :disabled="loading"
+                @click="switchSource(t)"
+              >
+                换源
+              </button>
+              <button
+                v-if="t.status === 'failed' || t.status === 'cancelled'"
+                class="btn btn-ghost btn-sm"
+                type="button"
+                :disabled="loading"
+                @click="deleteOne(t)"
+              >
+                删除
+              </button>
+            </div>
           </div>
-
-          <div class="task-ops">
-            <button
-              v-if="t.status === 'queued' || t.status === 'running'"
-              class="btn btn-ghost btn-sm"
-              type="button"
-              @click="cancel(t)"
-            >
-              取消
-            </button>
-            <button
-              v-if="t.status === 'completed'"
-              class="btn btn-ghost btn-sm"
-              type="button"
-              @click="deleteOne(t)"
-            >
-              删除
-            </button>
-            <button
-              v-if="t.status === 'failed' || t.status === 'cancelled'"
-              class="btn btn-ghost btn-sm"
-              type="button"
-              :disabled="loading"
-              @click="retry(t)"
-            >
-              重试
-            </button>
-            <button
-              v-if="t.status === 'failed' || t.status === 'cancelled'"
-              class="btn btn-sm"
-              type="button"
-              :disabled="loading"
-              @click="switchSource(t)"
-            >
-              换源
-            </button>
-            <button
-              v-if="t.status === 'failed' || t.status === 'cancelled'"
-              class="btn btn-ghost btn-sm"
-              type="button"
-              :disabled="loading"
-              @click="deleteOne(t)"
-            >
-              删除
-            </button>
-          </div>
-        </div>
-      </template>
-    </VirtualList>
-    <p v-else class="muted empty">当前分类没有任务</p>
+        </template>
+      </VirtualList>
+      <p v-else class="muted empty">当前分类没有任务</p>
+    </div>
 
     <DeleteConfirmDialog
       v-model:open="deleteDialogOpen"
@@ -453,28 +602,59 @@ onBeforeUnmount(() => {
       @confirm="onDeleteConfirm"
       @cancel="onDeleteCancel"
     />
+    <SwitchSourceDialog
+      v-model:open="switchDialogOpen"
+      :title="switchDialogTitle"
+      :description="switchDialogDesc"
+      :options="switchOptions"
+      :loading="loading"
+      @confirm="onSwitchConfirm"
+      @cancel="onSwitchCancel"
+    />
   </div>
 </template>
 
 <style scoped>
+/* 填满主内容区；列表内部滚动，避免整页出现滚动条 */
+.page-queue {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  box-sizing: border-box;
+}
 .tabs {
   display: flex;
-  gap: 12px;
+  gap: 20px;
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
+  flex-shrink: 0;
 }
 .tab {
   border: none;
   background: transparent;
   cursor: pointer;
   color: var(--muted);
-  padding: 6px 4px;
+  padding: 8px 2px 10px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.tab-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
 }
 .tab.active {
   color: var(--accent);
   font-weight: 600;
-  border-bottom: 2px solid var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab.active .tab-count {
+  font-weight: 600;
 }
 .toolbar {
   display: flex;
@@ -482,6 +662,14 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.list-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .check {
   display: inline-flex;
@@ -645,10 +833,12 @@ onBeforeUnmount(() => {
 .empty {
   text-align: center;
   padding: 40px;
+  margin: 0;
 }
 .tip {
   color: var(--accent);
   margin: 0 0 8px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 560px) {

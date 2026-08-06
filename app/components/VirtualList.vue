@@ -7,11 +7,14 @@ const props = withDefaults(
     estimateSize?: number
     overscan?: number
     maxHeight?: string
+    /** 填满父级高度（父级需有明确高度，如 flex:1） */
+    fill?: boolean
   }>(),
   {
     estimateSize: 64,
     overscan: 8,
     maxHeight: '480px',
+    fill: false,
   },
 )
 
@@ -32,7 +35,12 @@ const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 </script>
 
 <template>
-  <div ref="parentRef" class="virtual-list" :style="{ maxHeight }">
+  <div
+    ref="parentRef"
+    class="virtual-list"
+    :class="{ fill }"
+    :style="fill ? { height: '100%', maxHeight: '100%' } : { maxHeight }"
+  >
     <div class="virtual-inner" :style="{ height: `${totalSize}px` }">
       <div
         v-for="v in virtualItems"
@@ -54,6 +62,10 @@ const virtualItems = computed(() => virtualizer.value.getVirtualItems())
   overflow: auto;
   width: 100%;
   position: relative;
+}
+.virtual-list.fill {
+  flex: 1;
+  min-height: 0;
 }
 .virtual-inner {
   width: 100%;

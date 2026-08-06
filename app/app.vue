@@ -17,14 +17,24 @@ useHead({
 <template>
   <div class="app-shell">
     <AppHeader v-if="route.path !== '/login'" />
-    <NuxtPage />
+    <main class="app-main">
+      <NuxtPage />
+    </main>
   </div>
 </template>
 
 <style scoped>
 .app-shell {
-  min-height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
+}
+.app-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 </style>

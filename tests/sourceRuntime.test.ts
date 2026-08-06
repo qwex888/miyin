@@ -8,6 +8,7 @@ import {
   loadLxSource,
   parseScriptHeader,
   isBenignSourceNetworkError,
+  isBenignSourceScriptError,
   acquireSourceRejectionGuard,
   settleSourceNetworkErrors,
 } from '../server/services/sourceRuntime'
@@ -101,6 +102,13 @@ send(EVENT_NAMES.inited, { sources: { wy: { qualitys: ['128k'] } } })
     })
     expect(isBenignSourceNetworkError(err)).toBe(true)
     expect(isBenignSourceNetworkError(new Error('业务逻辑错误'))).toBe(false)
+  })
+
+  it('classifies undefined property access as benign script errors', () => {
+    const err = new Error("Cannot read properties of undefined (reading '0')")
+    expect(isBenignSourceScriptError(err)).toBe(true)
+    expect(isBenignSourceNetworkError(err)).toBe(false)
+    expect(isBenignSourceScriptError(new Error('业务逻辑错误'))).toBe(false)
   })
 
   it('captures fire-and-forget checkUpdate network rejection', async () => {

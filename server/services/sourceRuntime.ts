@@ -95,6 +95,13 @@ export function isBenignSourceNetworkError(reason: unknown): boolean {
   )
 }
 
+/** 第三方音源脚本常见空值访问等，guard 窗口内降为 warn，避免刷 [unhandledRejection] */
+export function isBenignSourceScriptError(reason: unknown): boolean {
+  if (isBenignSourceNetworkError(reason)) return true
+  const msg = String((reason as { message?: string } | null)?.message || reason || '')
+  return /Cannot read propert(y|ies) of (undefined|null)/i.test(msg)
+}
+
 type RejectionBucket = { errors: Error[] }
 
 let rejectionGuardDepth = 0
@@ -110,10 +117,11 @@ function ensureRejectionGuard() {
     process.removeListener('unhandledRejection', l)
   }
   rejectionGuardHandler = (reason: unknown, promise: Promise<unknown>) => {
-    if (isBenignSourceNetworkError(reason)) {
+    if (isBenignSourceScriptError(reason)) {
       const e = reason instanceof Error ? reason : new Error(String(reason))
       for (const b of rejectionBuckets) b.errors.push(e)
-      console.warn('[source] network error:', e.message)
+      const kind = isBenignSourceNetworkError(reason) ? 'network error' : 'script error'
+      console.warn(`[source] ${kind}:`, e.message)
       // 已临时接管 unhandledRejection 监听，不再事后 catch（避免 PromiseRejectionHandledWarning）
       void promise
       return
@@ -142,7 +150,7 @@ function teardownRejectionGuard() {
 }
 
 /**
- * 在音源加载/检测窗口内拦截脚本未 catch 的网络 Promise 拒绝，
+ * 在音源加载/检测窗口内拦截脚本未 catch 的网络/空值访问 Promise 拒绝，
  * 降级为 warn，避免 Nuxt 打出 [unhandledRejection]。
  */
 export function acquireSourceRejectionGuard(): {

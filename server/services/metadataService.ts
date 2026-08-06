@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, writeFileSync, renameSync, unlinkSync, copyFil
 import { tmpdir } from 'node:os'
 import { join, dirname, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { sniffAudioExt } from '../utils/audioSniff'
 
 let ffmpegAvailable: boolean | null = null
 
@@ -128,7 +129,10 @@ export async function writeAudioMetadata(
   if (lyrics) meta.lyrics = lyrics
 
   const dir = mkdtempSync(join(tmpdir(), 'miyin-meta-'))
-  const ext = extname(filePath) || '.mp3'
+  const sniffed = sniffAudioExt(filePath)
+  const extFromName = (extname(filePath) || '.mp3').replace(/^\./, '').toLowerCase()
+  const extNorm = (sniffed || extFromName || 'mp3').toLowerCase()
+  const ext = `.${extNorm}`
   const outPath = join(dir, `out${ext}`)
   const coverPath = join(dir, 'cover.jpg')
   let hasCover = false
@@ -136,11 +140,15 @@ export async function writeAudioMetadata(
     hasCover = await downloadCover(String(meta.coverUrl), coverPath)
   }
 
-  const args = ['-y', '-i', filePath]
-  if (hasCover) args.push('-i', coverPath)
+  // 仅在容器与编码一致时嵌封面；否则只写标签，避免 mp3 内容写进 .flac 失败
+  const attachCover =
+    hasCover &&
+    (extNorm === 'mp3' || extNorm === 'm4a' || extNorm === 'flac' || extNorm === 'ogg') &&
+    (!sniffed || sniffed === extNorm)
 
-  if (hasCover) {
-    args.push('-map', '0:a', '-map', '1', '-c', 'copy', '-disposition:v:0', 'attached_pic')
+  const args = ['-y', '-i', filePath]
+  if (attachCover) {
+    args.push('-i', coverPath, '-map', '0:a', '-map', '1', '-c', 'copy', '-disposition:v:0', 'attached_pic')
   } else {
     args.push('-map', '0', '-c', 'copy')
   }
@@ -161,12 +169,12 @@ export async function writeAudioMetadata(
   // 部分播放器读 LYRICS / unsynced lyrics
   add('LYRICS', meta.lyrics)
 
-  if (hasCover) {
+  if (attachCover) {
     args.push('-metadata:s:v', 'title=Album cover', '-metadata:s:v', 'comment=Cover (front)')
   }
 
   // MP3 兼容
-  if (ext.toLowerCase() === '.mp3') {
+  if (extNorm === 'mp3') {
     args.push('-id3v2_version', '3')
   }
 
