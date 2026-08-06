@@ -15,7 +15,7 @@ type Settings = {
 const form = reactive<Settings>({
   downloadDir: './downloads',
   defaultQuality: 'highest',
-  concurrency: 2,
+  concurrency: 1,
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',

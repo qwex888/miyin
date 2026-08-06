@@ -27,8 +27,10 @@ const deleteDialogOpen = ref(false)
 const deleteDialogTitle = ref('确认删除')
 const deleteDialogDesc = ref('')
 let deletePending: null | { mode: 'one'; task: Task } | { mode: 'batch' } = null
-let timer: any
-let es: EventSource | null = null
+
+const { notifyChanged, onSnapshot, onTask, cache, startWatching } = useDownloadEvents()
+let offSnapshot: (() => void) | null = null
+let offTask: (() => void) | null = null
 
 type SourceRowLite = {
   id: string
@@ -163,7 +165,7 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
     switchDialogOpen.value = false
     switchPending = null
     await load()
-    useDownloadBadge().notifyChanged()
+    notifyChanged()
   } catch (e: any) {
     msg.value = e?.data?.statusMessage || e?.message || '换源失败'
   } finally {
@@ -265,27 +267,16 @@ async function load() {
   applyFilter()
 }
 
-function connectSse() {
-  try {
-    const base = (useRuntimeConfig().app.baseURL || '/').replace(/\/?$/, '/')
-    es = new EventSource(`${base}api/downloads/events`)
-    es.addEventListener('snapshot', (ev) => {
-      const data = JSON.parse((ev as MessageEvent).data)
-      allItems.value = data.items || []
-      applyFilter()
-    })
-    es.addEventListener('task', (ev) => {
-      const task = JSON.parse((ev as MessageEvent).data)
-      upsert(task)
-    })
-    es.onerror = () => {
-      es?.close()
-      es = null
-      if (!timer) timer = setInterval(load, 2000)
-    }
-  } catch {
-    timer = setInterval(load, 2000)
-  }
+function bindDownloadEvents() {
+  offSnapshot?.()
+  offTask?.()
+  offSnapshot = onSnapshot((list) => {
+    allItems.value = list as Task[]
+    applyFilter()
+  })
+  offTask = onTask((task) => {
+    upsert(task as Task)
+  })
 }
 
 function toggleOne(id: string, checked: boolean) {
@@ -307,14 +298,14 @@ async function cancel(t: Task) {
   if (!confirm(`确认取消任务「${t.title}」？未完成文件将被删除；若已完成也会删除本地文件。`)) return
   await $fetch(`/api/downloads/${t.id}`, { method: 'DELETE' })
   await load()
-  useDownloadBadge().notifyChanged()
+  notifyChanged()
 }
 
 async function retry(t: Task) {
   await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
   // 留在失败 tab，刷新后该条会从当前列表消失
   await load()
-  useDownloadBadge().notifyChanged()
+  notifyChanged()
 }
 
 async function switchSource(t: Task) {
@@ -367,7 +358,7 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
     deleteDialogOpen.value = false
     deletePending = null
     await load()
-    useDownloadBadge().notifyChanged()
+    notifyChanged()
   } catch (e: any) {
     msg.value = e?.data?.statusMessage || e?.message || '删除失败'
   } finally {
@@ -392,7 +383,7 @@ async function batchCancel() {
     selected.value = new Set()
     msg.value = '已批量取消'
     await load()
-    useDownloadBadge().notifyChanged()
+    notifyChanged()
   } catch (e: any) {
     msg.value = e?.data?.statusMessage || e?.message || '批量取消失败'
   } finally {
@@ -412,7 +403,7 @@ async function batchRetry() {
     selected.value = new Set()
     msg.value = '已批量重试'
     await load()
-    useDownloadBadge().notifyChanged()
+    notifyChanged()
   } catch (e: any) {
     msg.value = e?.data?.statusMessage || e?.message || '批量重试失败'
   } finally {
@@ -429,12 +420,24 @@ watch(tab, () => {
   applyFilter()
 })
 onMounted(() => {
-  void load()
-  connectSse()
+  // 仅订阅；建连由顶栏 startWatching 负责（若尚未启动则补一次）
+  startWatching()
+  bindDownloadEvents()
+  if (cache.value.length) {
+    allItems.value = cache.value as Task[]
+    applyFilter()
+  } else {
+    void load()
+  }
 })
 onBeforeUnmount(() => {
-  if (timer) clearInterval(timer)
-  es?.close()
+  offSnapshot?.()
+  offTask?.()
+  offSnapshot = null
+  offTask = null
+})
+onActivated(() => {
+  bindDownloadEvents()
 })
 </script>
 

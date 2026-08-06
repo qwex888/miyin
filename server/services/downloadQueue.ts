@@ -21,6 +21,17 @@ import { loadLxSource, pickQuality } from './sourceRuntime'
 import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
 import { sniffAudioExt } from '../utils/audioSniff'
+import {
+  expectedDurationFromMusicInfo,
+  isLikelyPreviewByAbsoluteDuration,
+  isLikelyPreviewClip,
+  isLikelyPreviewUrl,
+  minFullTrackBytes,
+  previewClipError,
+  previewSizeError,
+  previewUrlError,
+  probeAudioDurationSeconds,
+} from '../utils/audioPreview'
 import { nextStatusAfterFailure, isRetryableError } from './downloadState'
 
 export type { TaskStatus } from './downloadState'
@@ -410,6 +421,7 @@ async function downloadFile(
   dest: string,
   onProgress: (p: number, received: number, total: number) => void,
   taskId: string,
+  opts?: { expectedDurationSec?: number | null; quality?: string | null },
 ) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'miyin/0.1', Referer: 'https://www.google.com/' },
@@ -420,6 +432,11 @@ async function downloadFile(
     throw err
   }
   const total = Number(res.headers.get('content-length') || 0)
+  const expected = opts?.expectedDurationSec
+  if (total > 0 && expected && expected >= 90) {
+    const minBytes = minFullTrackBytes(expected, opts?.quality)
+    if (total < minBytes) throw previewSizeError(total, expected)
+  }
   let received = 0
   const nodeStream = Readable.fromWeb(res.body as any)
   const out = createWriteStream(dest)
@@ -457,6 +474,9 @@ async function processTask(task: DownloadTaskRow) {
     const musicInfo = JSON.parse(task.music_info_json || '{}')
     const { url, quality } = await resolveUrl(task, task.quality || settings.defaultQuality)
     if (cancelSet.has(task.id)) throw new Error('cancelled')
+    if (isLikelyPreviewUrl(url)) throw previewUrlError()
+
+    const expectedDuration = expectedDurationFromMusicInfo(musicInfo)
 
     const dir = getDownloadDir(settings.downloadDir)
     const trackNo = musicInfo.track || musicInfo.trackNo || musicInfo.tracknum || musicInfo.no
@@ -481,6 +501,7 @@ async function processTask(task: DownloadTaskRow) {
           file_size: total > 0 ? total : received || null,
         }),
       task.id,
+      { expectedDurationSec: expectedDuration, quality },
     )
 
     if (cancelSet.has(task.id)) throw new Error('cancelled')
@@ -493,6 +514,22 @@ async function processTask(task: DownloadTaskRow) {
       fileSize = statSync(filePath).size
     } catch {
       fileSize = null
+    }
+
+    // 试听检测：有期望时长则对比；否则兜底识别 QQ/网易常见固定试听时长
+    {
+      const actual = await probeAudioDurationSeconds(filePath)
+      if (actual != null) {
+        if (expectedDuration && expectedDuration > 0 && isLikelyPreviewClip(actual, expectedDuration)) {
+          throw previewClipError(actual, expectedDuration)
+        }
+        if (
+          !(expectedDuration && expectedDuration > 0) &&
+          isLikelyPreviewByAbsoluteDuration(actual, fileSize)
+        ) {
+          throw previewClipError(actual, null)
+        }
+      }
     }
 
     const downloadLyric =
@@ -566,7 +603,10 @@ async function processTask(task: DownloadTaskRow) {
     }
     const attempts = (task.attempts || 0) + 1
     const settings2 = getSettings()
-    const retryable = isRetryableError(err) || String(err?.code) === 'HTTP_RETRY'
+    // 试听片段：只标失败，不自动换源/重试；由用户在队列手动换源
+    const isPreview = String(err?.code) === 'PREVIEW_CLIP'
+    const retryable =
+      !isPreview && (isRetryableError(err) || String(err?.code) === 'HTTP_RETRY')
     const alts = listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
     const nextStatus = nextStatusAfterFailure({
       attempts,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ middleware: [] })
+definePageMeta({ middleware: [], keepalive: false })
 
 const token = ref('')
 const error = ref('')

@@ -111,6 +111,7 @@ async function searchKw(keyword: string, page: number): Promise<SearchTrack[]> {
         songmid: id,
         hash: id,
         source: 'kw',
+        interval: formatIntervalFromSec(Number(s.DURATION || 0)),
       },
     }
   })
@@ -140,6 +141,7 @@ async function searchKg(keyword: string, page: number): Promise<SearchTrack[]> {
         songmid: hash,
         source: 'kg',
         img: s.Image?.replace('{size}', '240'),
+        interval: formatIntervalFromSec(Number(s.Duration || 0)),
       },
     }
   })
@@ -170,6 +172,7 @@ async function searchTx(keyword: string, page: number): Promise<SearchTrack[]> {
         hash: mid,
         strMediaMid: s.strMediaMid,
         source: 'tx',
+        interval: formatIntervalFromSec(Number(s.interval || 0)),
       },
     }
   })
@@ -185,7 +188,11 @@ function decode(s: any) {
 }
 
 function formatInterval(ms: number) {
-  const sec = Math.round((ms || 0) / 1000)
+  return formatIntervalFromSec(Math.round((ms || 0) / 1000))
+}
+
+function formatIntervalFromSec(secRaw: number) {
+  const sec = Math.max(0, Math.round(secRaw || 0))
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return `${m}:${String(s).padStart(2, '0')}`

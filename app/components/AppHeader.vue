@@ -2,7 +2,7 @@
 const config = useRuntimeConfig()
 const route = useRoute()
 const { logout } = useAuth()
-const { activeCount, startWatching } = useDownloadBadge()
+const { activeCount, startWatching } = useDownloadEvents()
 const { mode, cycle } = useTheme()
 
 const links = [
