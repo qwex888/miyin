@@ -34,12 +34,13 @@ useHead({
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'has-bottom-nav': route.path !== '/login' }">
     <AppHeader v-if="route.path !== '/login'" />
     <main class="app-main">
       <!-- 切换路由时缓存页面实例，SSE/轮询等通信不断开，返回可直接看最新数据 -->
       <NuxtPage :keepalive="{ max: 10 }" />
     </main>
+    <AppBottomNav v-if="route.path !== '/login'" />
   </div>
 </template>
 

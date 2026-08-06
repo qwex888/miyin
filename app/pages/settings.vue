@@ -84,6 +84,9 @@ onMounted(load)
 <template>
   <div class="page">
     <h2>设置</h2>
+    <p class="hint auth-hint">
+      鉴权由环境变量 <code>AUTH_TOKEN</code> 控制：为空则开放模式（无登录）；非空则需口令登录。飞牛安装向导可留空。
+    </p>
     <form class="card form" @submit.prevent="save">
       <label>
         <span>下载目录</span>
@@ -179,9 +182,12 @@ onMounted(load)
   margin: 0;
 }
 .hint {
-  margin: 0;
+  margin: 0 0 12px;
   font-size: 12px;
   color: var(--muted);
+}
+.auth-hint code {
+  color: var(--accent);
 }
 .warn {
   margin: 0;
@@ -196,5 +202,14 @@ onMounted(load)
 }
 .var-list code {
   color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .form {
+    max-width: none;
+  }
+  .check {
+    min-height: 44px;
+  }
 }
 </style>

@@ -171,4 +171,27 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   font-size: 13px;
   border-radius: 8px;
 }
+
+@media (max-width: 768px) {
+  .overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .dialog {
+    width: 100%;
+    max-width: none;
+    border-radius: 16px 16px 0 0;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .option {
+    min-height: 48px;
+  }
+  .footer {
+    flex-direction: column-reverse;
+  }
+  .footer .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}
 </style>

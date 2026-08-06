@@ -5,22 +5,18 @@
       {
         "type": "password",
         "field": "wizard_auth_token",
-        "label": "访问口令（AUTH_TOKEN）",
+        "label": "访问口令（AUTH_TOKEN，选填）",
         "initValue": "",
         "rules": [
           {
-            "required": true,
-            "message": "请设置访问口令"
-          },
-          {
-            "min": 6,
-            "message": "口令至少 6 位"
+            "pattern": "^$|^.{6,}$",
+            "message": "口令至少 6 位，或留空以关闭鉴权"
           }
         ]
       },
       {
         "type": "tips",
-        "helpText": "登录网页时使用该口令。会话密钥（SESSION_SECRET）将在安装时自动生成，无需填写。飞牛统一网关下通过 /app/miyin 访问，无需配置对外端口。"
+        "helpText": "留空则进入开放模式：无登录页，API 免鉴权（飞牛网关下通常足够）。填写口令则需登录后使用。SESSION_SECRET 安装时自动生成。统一网关通过 /app/miyin 访问，无需配置对外端口。"
       }
     ]
   },

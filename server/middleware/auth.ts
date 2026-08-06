@@ -1,11 +1,17 @@
 import { verifySession } from '../utils/crypto'
+import { isAuthRequired } from '../utils/authMode'
 
 export default defineEventHandler((event) => {
   const path = getRequestURL(event).pathname
   if (!path.startsWith('/api/')) return
-  if (path === '/api/auth/login' || path === '/api/health') return
+  if (path === '/api/auth/login' || path === '/api/auth/me' || path === '/api/health') return
 
   const config = useRuntimeConfig()
+  if (!isAuthRequired(config.authToken)) {
+    event.context.auth = { open: true }
+    return
+  }
+
   const cookie = getCookie(event, 'miyin_session')
   const header = getHeader(event, 'authorization')
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined

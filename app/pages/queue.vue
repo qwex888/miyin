@@ -504,7 +504,8 @@ onActivated(() => {
         v-if="items.length"
         :key="tab"
         :items="items"
-        :estimate-size="88"
+        :estimate-size="120"
+        :dynamic="true"
         fill
       >
         <template #default="{ item: t }">
@@ -685,23 +686,21 @@ onActivated(() => {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
   gap: 8px 12px;
-  align-items: center;
+  align-items: start;
   margin: 0 0 8px;
   padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-sizing: border-box;
-  min-height: calc(100% - 8px);
   height: auto;
-  max-height: calc(100% - 8px);
-  overflow: hidden;
+  overflow: visible;
 }
 .task-check {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-top: 0;
+  padding-top: 2px;
   cursor: pointer;
 }
 .task-main {
@@ -806,10 +805,11 @@ onActivated(() => {
 .task-path {
   margin: 0;
   font-size: 12px;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  word-break: break-all;
 }
 .task-err {
   color: var(--danger);
@@ -844,10 +844,52 @@ onActivated(() => {
   flex-shrink: 0;
 }
 
+@media (max-width: 768px) {
+  .page-queue {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .tabs {
+    gap: 0;
+    overflow: hidden;
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+  .tab {
+    flex: 1;
+    min-width: 0;
+    min-height: 40px;
+    padding: 10px 2px;
+    text-align: center;
+    font-size: 13px;
+  }
+  .toolbar {
+    gap: 8px;
+  }
+  .toolbar .btn {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+  }
+  .task {
+    grid-template-columns: 28px minmax(0, 1fr);
+    padding: 12px;
+  }
+  .task-ops {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .task-ops .btn {
+    min-height: 36px;
+  }
+  .progress {
+    max-width: none;
+  }
+}
+
 @media (max-width: 560px) {
   .task {
     grid-template-columns: 28px minmax(0, 1fr);
-    max-height: none;
   }
   .task-ops {
     grid-column: 2;

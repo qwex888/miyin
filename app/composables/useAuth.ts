@@ -1,14 +1,19 @@
 export function useAuth() {
   const loggedIn = useState('auth:loggedIn', () => false)
+  const authRequired = useState('auth:required', () => true)
 
   async function refresh() {
     try {
-      // SSR 时转发浏览器 Cookie，避免刷新后误判未登录
       const requestFetch = useRequestFetch()
-      await requestFetch('/api/auth/me')
+      const res = await requestFetch<{ ok: boolean; authRequired?: boolean; loggedIn?: boolean }>(
+        '/api/auth/me',
+      )
+      authRequired.value = res.authRequired !== false
       loggedIn.value = true
       return true
     } catch {
+      // me 仅在「需要鉴权且未登录」时 401；开放模式总会 ok
+      authRequired.value = true
       loggedIn.value = false
       return false
     }
@@ -17,6 +22,7 @@ export function useAuth() {
   async function login(token: string) {
     const requestFetch = useRequestFetch()
     await requestFetch('/api/auth/login', { method: 'POST', body: { token } })
+    authRequired.value = true
     loggedIn.value = true
   }
 
@@ -26,9 +32,10 @@ export function useAuth() {
       await requestFetch('/api/auth/logout', { method: 'POST' })
     } finally {
       loggedIn.value = false
-      await navigateTo('/login')
+      if (authRequired.value) await navigateTo('/login')
+      else await navigateTo('/')
     }
   }
 
-  return { loggedIn, refresh, login, logout }
+  return { loggedIn, authRequired, refresh, login, logout }
 }

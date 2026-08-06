@@ -301,7 +301,8 @@ async function confirmAndEnqueue() {
       <VirtualList
         v-if="preview.tracks.length"
         :items="preview.tracks"
-        :estimate-size="44"
+        :estimate-size="72"
+        :dynamic="true"
         max-height="420px"
       >
         <template #default="{ item, index }">
@@ -311,8 +312,12 @@ async function confirmAndEnqueue() {
               :checked="selected.has(trackKey(index))"
               @change="toggleOne(index, ($event.target as HTMLInputElement).checked)"
             />
-            <span class="track-title">{{ item.title }}</span>
-            <span class="muted track-artist">{{ item.artist }}</span>
+            <span class="track-meta">
+              <span class="track-title">{{ item.title }}</span>
+              <span class="track-artist">
+                {{ item.artist || '未知歌手' }}<template v-if="item.album"> · {{ item.album }}</template>
+              </span>
+            </span>
           </label>
         </template>
       </VirtualList>
@@ -416,26 +421,42 @@ async function confirmAndEnqueue() {
 }
 .track-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 100%;
-  padding: 0 4px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 4px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.track-row input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.track-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .track-title {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 560;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text);
 }
 .track-artist {
-  flex: 0 1 40%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
 }
 .result-row {
   display: flex;
@@ -462,5 +483,69 @@ async function confirmAndEnqueue() {
   gap: 8px;
   margin: 4px 0;
   font-size: 13px;
+}
+
+@media (max-width: 768px) {
+  .row {
+    flex-direction: column;
+  }
+  .row .input {
+    min-width: 0;
+    width: 100%;
+  }
+  .row .btn {
+    width: 100%;
+  }
+  .lyric-opts {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .field-inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .preview-head {
+    flex-direction: column;
+  }
+  .actions .btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .track-row {
+    padding: 16px 6px;
+    gap: 14px;
+    min-height: 64px;
+  }
+  .track-row input {
+    margin-top: 4px;
+    width: 20px;
+    height: 20px;
+  }
+  .track-meta {
+    gap: 6px;
+  }
+  .track-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-size: 15px;
+    line-height: 1.4;
+  }
+  .track-artist {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-size: 13px;
+    line-height: 1.4;
+    /* 比桌面 muted 更亮，避免暗色主题下几乎看不见 */
+    color: color-mix(in oklab, var(--text) 55%, var(--muted));
+    opacity: 1;
+  }
+  .choice {
+    min-height: 40px;
+  }
 }
 </style>

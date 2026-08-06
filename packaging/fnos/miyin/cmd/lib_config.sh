@@ -31,14 +31,15 @@ miyin_gen_session_secret() {
 }
 
 # 根据向导变量写入配置。保留已有 SESSION_SECRET。
+# AUTH_TOKEN 允许为空：空 = 开放模式（免登录）。
 miyin_write_config_from_wizard() {
   local token="${wizard_auth_token:-}"
   local mode="${wizard_download_mode:-default}"
   local custom_dir="${wizard_download_dir:-}"
   local secret=""
 
-  if [ -z "$token" ]; then
-    echo "访问口令不能为空" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+  if [ -n "$token" ] && [ "${#token}" -lt 6 ]; then
+    echo "访问口令至少 6 位，或留空以关闭鉴权" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
     return 1
   fi
 
@@ -61,6 +62,7 @@ miyin_write_config_from_wizard() {
   umask 077
   cat >"$MIYIN_CFG_FILE" <<EOF
 # 觅音运行配置（由安装/配置向导生成，请勿手改敏感字段到日志）
+# AUTH_TOKEN 为空表示开放模式（免登录）
 AUTH_TOKEN='$(miyin_shell_escape "$token")'
 SESSION_SECRET='$(miyin_shell_escape "$secret")'
 DOWNLOAD_MODE='$(miyin_shell_escape "$mode")'

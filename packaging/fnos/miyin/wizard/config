@@ -5,22 +5,18 @@
       {
         "type": "password",
         "field": "wizard_auth_token",
-        "label": "访问口令（AUTH_TOKEN）",
+        "label": "访问口令（AUTH_TOKEN，选填）",
         "initValue": "",
         "rules": [
           {
-            "required": true,
-            "message": "请设置访问口令"
-          },
-          {
-            "min": 6,
-            "message": "口令至少 6 位"
+            "pattern": "^$|^.{6,}$",
+            "message": "口令至少 6 位，或留空以关闭鉴权"
           }
         ]
       },
       {
         "type": "tips",
-        "helpText": "修改后将写入配置并重启服务。SESSION_SECRET 保持安装时生成的值不变。"
+        "helpText": "留空关闭鉴权；填写则启用登录。修改后将写入配置并重启服务。SESSION_SECRET 保持安装时生成的值不变。"
       }
     ]
   },

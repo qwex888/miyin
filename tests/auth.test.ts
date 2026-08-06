@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { verifySession, createSessionToken } from '../server/utils/crypto'
+import { isAuthRequired } from '../server/utils/authMode'
 import { nextStatusAfterFailure } from '../server/services/downloadState'
 import { openDb } from '../server/utils/db'
 import { mkdtempSync } from 'node:fs'
@@ -15,6 +16,15 @@ describe('auth session', () => {
   it('accepts valid session', () => {
     const token = createSessionToken('secret')
     expect(verifySession(token, 'secret')).toBeTruthy()
+  })
+})
+
+describe('auth mode', () => {
+  it('empty token means open mode', () => {
+    expect(isAuthRequired('')).toBe(false)
+    expect(isAuthRequired('   ')).toBe(false)
+    expect(isAuthRequired(undefined)).toBe(false)
+    expect(isAuthRequired('changeme')).toBe(true)
   })
 })
 

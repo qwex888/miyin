@@ -233,6 +233,23 @@ select {
   padding: 20px 16px 80px;
 }
 
+@media (max-width: 768px) {
+  .page {
+    padding: 12px 12px 24px;
+  }
+
+  .btn {
+    min-height: 44px;
+  }
+
+  .input,
+  .select,
+  textarea.input {
+    min-height: 44px;
+    font-size: 16px; /* 避免 iOS 聚焦放大 */
+  }
+}
+
 .page h2 {
   margin: 0 0 12px;
   font-size: 1.25rem;

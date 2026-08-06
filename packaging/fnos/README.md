@@ -18,7 +18,7 @@
 
 | 字段 | 说明 |
 |------|------|
-| `wizard_auth_token` | 访问口令 → 写入 `$TRIM_PKGETC/miyin.env` 的 `AUTH_TOKEN` |
+| `wizard_auth_token` | 访问口令 → `AUTH_TOKEN`（**选填**；留空=开放模式） |
 | `wizard_download_mode` | `default`（共享目录 `miyin/downloads`）或 `custom` |
 | `wizard_download_dir` | 自定义绝对路径（仅 custom） |
 | SESSION_SECRET | **安装时自动生成**，配置变更时保留 |

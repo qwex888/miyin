@@ -172,16 +172,22 @@ onMounted(load)
 <template>
   <div class="page">
     <div class="toolbar">
-      <h2>音源管理</h2>
+      <div class="title">
+        <h2>音源管理</h2>
+        <div class="actions">
+          <button class="btn btn-ghost" type="button" :disabled="loading" @click="checkAll">检测全部</button>
+          <button class="btn btn-ghost" type="button" @click="cleanup">清理失效</button>
+        </div>
+      </div>
       <div class="actions">
         <button class="btn" type="button" @click="showAdd = true">单个新增</button>
         <button class="btn btn-ghost" type="button" @click="showImport = true">批量导入</button>
-        <button class="btn btn-ghost" type="button" :disabled="loading" @click="checkAll">检测全部</button>
-        <button class="btn btn-ghost" type="button" @click="cleanup">清理失效</button>
+        
         <button
+          v-if="selectedCount > 0"
           class="btn btn-danger"
           type="button"
-          :disabled="loading || !selectedCount"
+          :disabled="loading"
           @click="batchDelete"
         >
           删除选中（{{ selectedCount }}）
@@ -305,6 +311,12 @@ onMounted(load)
 .toolbar h2 {
   margin: 0;
 }
+.toolbar .title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
 .actions {
   display: flex;
   gap: 8px;
@@ -343,5 +355,34 @@ onMounted(load)
 .field span {
   font-size: 13px;
   color: var(--muted);
+}
+
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .actions {
+    width: 100%;
+  }
+  .actions .btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .ops {
+    width: 100%;
+  }
+  .ops .btn {
+    flex: 1;
+    min-height: 40px;
+  }
+  .table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .toolbar .title .actions {
+    width: 65%;
+  }
 }
 </style>

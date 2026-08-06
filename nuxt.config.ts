@@ -33,7 +33,7 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
-    authToken: process.env.AUTH_TOKEN || 'changeme',
+    authToken: process.env.AUTH_TOKEN ?? '',
     dataDir: process.env.DATA_DIR || './data',
     downloadDir: process.env.DOWNLOAD_DIR || './downloads',
     sessionSecret: process.env.SESSION_SECRET || 'dev-change-me',
