@@ -5,6 +5,7 @@ const { logout } = useAuth()
 
 const links = [
   { to: '/', label: '搜索' },
+  { to: '/playlist', label: '歌单' },
   { to: '/queue', label: '下载队列' },
   { to: '/sources', label: '音源管理' },
   { to: '/settings', label: '设置' },

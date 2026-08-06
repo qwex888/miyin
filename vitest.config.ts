@@ -6,6 +6,10 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     pool: 'forks',
+    env: {
+      MIYIN_SOURCE_CALL_TIMEOUT_MS: '800',
+      MIYIN_SOURCE_LOAD_TIMEOUT_MS: '500',
+    },
   },
   resolve: {
     alias: {

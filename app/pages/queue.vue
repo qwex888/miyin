@@ -15,7 +15,9 @@ type Task = {
 
 const tab = ref<'running' | 'completed' | 'failed'>('running')
 const items = ref<Task[]>([])
+const allItems = ref<Task[]>([])
 let timer: any
+let es: EventSource | null = null
 
 const statusMap = {
   running: ['queued', 'running'],
@@ -23,10 +25,45 @@ const statusMap = {
   failed: ['failed', 'cancelled'],
 }
 
+function applyFilter() {
+  const allow = statusMap[tab.value]
+  items.value = allItems.value.filter((t) => allow.includes(t.status))
+}
+
+function upsert(task: Task) {
+  const idx = allItems.value.findIndex((t) => t.id === task.id)
+  if (idx >= 0) allItems.value[idx] = task
+  else allItems.value.unshift(task)
+  applyFilter()
+}
+
 async function load() {
   const res = await $fetch<{ items: Task[] }>('/api/downloads')
-  const allow = statusMap[tab.value]
-  items.value = res.items.filter((t) => allow.includes(t.status))
+  allItems.value = res.items
+  applyFilter()
+}
+
+function connectSse() {
+  try {
+    es = new EventSource('/api/downloads/events')
+    es.addEventListener('snapshot', (ev) => {
+      const data = JSON.parse((ev as MessageEvent).data)
+      allItems.value = data.items || []
+      applyFilter()
+    })
+    es.addEventListener('task', (ev) => {
+      const task = JSON.parse((ev as MessageEvent).data)
+      upsert(task)
+    })
+    es.onerror = () => {
+      es?.close()
+      es = null
+      // 回退轮询
+      if (!timer) timer = setInterval(load, 2000)
+    }
+  } catch {
+    timer = setInterval(load, 2000)
+  }
 }
 
 async function cancel(t: Task) {
@@ -35,17 +72,20 @@ async function cancel(t: Task) {
 }
 
 async function retry(t: Task) {
-  await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST' })
+  await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
   tab.value = 'running'
   await load()
 }
 
-watch(tab, load)
+watch(tab, applyFilter)
 onMounted(() => {
   void load()
-  timer = setInterval(load, 2000)
+  connectSse()
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer)
+  es?.close()
+})
 </script>
 
 <template>

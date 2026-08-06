@@ -1,0 +1,9 @@
+# App.Miyin — 飞牛 fnOS 应用骨架（二期完善）
+
+name: App.Miyin
+version: 0.1.0
+title: 觅音
+description: 多源音乐搜索与下载助手
+platform: x86
+os_min_version: 0.8.0
+category: multimedia

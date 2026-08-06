@@ -37,9 +37,24 @@ async function fetchJson(url: string, init?: RequestInit) {
 
 function artistsJoin(list: any, key = 'name') {
   if (!list) return '未知'
-  if (typeof list === 'string') return list
-  if (Array.isArray(list)) return list.map((a) => a?.[key] || a).filter(Boolean).join(' / ') || '未知'
-  return String(list)
+  if (typeof list === 'string') return cleanArtist(list)
+  if (Array.isArray(list)) {
+    return cleanArtist(list.map((a) => a?.[key] || a).filter(Boolean).join(' / ') || '未知')
+  }
+  return cleanArtist(String(list))
+}
+
+/** 清洗脏歌手字段：如「周杰伦- / A-LNK」→「周杰伦」 */
+export function cleanArtist(raw: string) {
+  let s = String(raw || '').trim()
+  if (!s) return '未知'
+  // 去掉「名- / 后缀」或「名-/后缀」
+  s = s.replace(/\s*-\s*\/\s*.+$/, '')
+  // 去掉末尾孤立的 - /
+  s = s.replace(/[\s\-\/]+$/g, '')
+  // 合并多余分隔
+  s = s.replace(/\s*\/\s*/g, ' / ').replace(/\s{2,}/g, ' ').trim()
+  return s || '未知'
 }
 
 async function searchWy(keyword: string, page: number): Promise<SearchTrack[]> {
@@ -191,12 +206,29 @@ export const PLATFORM_LABELS: Record<string, string> = {
   mg: '咪咕',
 }
 
+const searchCache = new Map<string, { at: number; items: SearchTrack[] }>()
+const SEARCH_TTL_MS = 60_000
+
+export function clearSearchCache() {
+  searchCache.clear()
+}
+
 export async function searchPlatform(platform: string, keyword: string, page = 1) {
   const fn = adapters[platform]
   if (!fn) throw createError({ statusCode: 400, statusMessage: `暂不支持平台: ${platform}` })
   if (!keyword.trim()) throw createError({ statusCode: 400, statusMessage: '请输入关键词' })
+  const key = `${platform}:${keyword.trim()}:${page}`
+  const hit = searchCache.get(key)
+  if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return hit.items
   try {
-    return await fn(keyword.trim(), page)
+    const items = await fn(keyword.trim(), page)
+    // 统一再清洗一遍
+    for (const it of items) {
+      it.artist = cleanArtist(it.artist)
+      if (it.musicInfo) it.musicInfo.singer = cleanArtist(it.musicInfo.singer || it.artist)
+    }
+    searchCache.set(key, { at: Date.now(), items })
+    return items
   } catch (err: any) {
     throw createError({
       statusCode: 502,

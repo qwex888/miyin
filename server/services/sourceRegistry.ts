@@ -3,7 +3,7 @@ import { writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
 import { parseSourceText } from './sourceImport'
-import { loadLxSource, type LxSourceHandle } from './sourceRuntime'
+import { loadLxSource } from './sourceRuntime'
 
 export type SourceRow = {
   id: string
@@ -66,7 +66,6 @@ export async function upsertSourceFromRemote(input: { name: string; url: string;
     const handle = loadLxSource(localPath)
     platforms = handle.platforms
     status = 'ok'
-    handle.dispose()
   } catch (err: any) {
     status = 'dead'
     lastError = err?.message || String(err)
@@ -172,7 +171,6 @@ export async function checkSources(ids?: string[]) {
             `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
           )
           .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
-        handle.dispose()
       }
       out.push({ id: row.id, status: 'ok' })
     } catch (err: any) {
