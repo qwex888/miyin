@@ -1,5 +1,13 @@
 import { EventEmitter } from 'node:events'
-import { createWriteStream, unlinkSync, existsSync, accessSync, constants } from 'node:fs'
+import {
+  createWriteStream,
+  unlinkSync,
+  existsSync,
+  accessSync,
+  constants,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { join } from 'node:path'
@@ -10,6 +18,7 @@ import { getSettings } from './settingsService'
 import { getSource, listEnabledOkSources } from './sourceRegistry'
 import { loadLxSource, pickQuality } from './sourceRuntime'
 import { fetchLyric } from './lyricService'
+import { writeAudioMetadata } from './metadataService'
 import { nextStatusAfterFailure, isRetryableError } from './downloadState'
 
 export type { TaskStatus } from './downloadState'
@@ -35,6 +44,7 @@ export type DownloadTaskRow = {
   batch_id: string | null
   playlist_url: string | null
   music_info_json: string | null
+  file_size: number | null
   created_at: string
   updated_at: string
 }
@@ -54,12 +64,27 @@ function sanitizeFilename(name: string) {
   return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'unknown'
 }
 
-export function applyNameTemplate(template: string, meta: { artist: string; title: string; album?: string }) {
+export function applyNameTemplate(
+  template: string,
+  meta: {
+    artist: string
+    title: string
+    album?: string
+    platform?: string
+    quality?: string
+    id?: string
+    track?: string | number
+  },
+) {
   return sanitizeFilename(
     template
-      .replace('{artist}', meta.artist || '未知')
-      .replace('{title}', meta.title || '未知')
-      .replace('{album}', meta.album || ''),
+      .replaceAll('{artist}', meta.artist || '未知')
+      .replaceAll('{title}', meta.title || '未知')
+      .replaceAll('{album}', meta.album || '')
+      .replaceAll('{platform}', meta.platform || '')
+      .replaceAll('{quality}', meta.quality || '')
+      .replaceAll('{id}', meta.id || '')
+      .replaceAll('{track}', meta.track != null ? String(meta.track) : ''),
   )
 }
 
@@ -79,6 +104,20 @@ function emitTask(id: string) {
   if (task) downloadEvents.emit('task', task)
 }
 
+function removeFileQuiet(path: string | null | undefined) {
+  if (!path || !existsSync(path)) return
+  try {
+    unlinkSync(path)
+  } catch {
+    /* ignore */
+  }
+}
+
+function removeTaskFiles(task: DownloadTaskRow) {
+  removeFileQuiet(task.file_path)
+  removeFileQuiet(task.lyric_path)
+}
+
 export function enqueueDownload(input: {
   title: string
   artist: string
@@ -90,6 +129,7 @@ export function enqueueDownload(input: {
   externalId?: string
   matchMethod?: string
   downloadLyric?: boolean
+  lyricMode?: 'external' | 'embedded'
   batchId?: string
   playlistUrl?: string
 }) {
@@ -104,12 +144,18 @@ export function enqueueDownload(input: {
     throw createError({ statusCode: 400, statusMessage: `没有可用音源支持平台 ${input.platform}` })
   }
 
+  const musicPayload = {
+    ...input.musicInfo,
+    __downloadLyric: input.downloadLyric ?? settings.downloadLyric,
+    __lyricMode: input.lyricMode ?? settings.lyricMode,
+  }
+
   getDb()
     .prepare(
       `INSERT INTO download_tasks (
         id, title, artist, album, platform, source_id, quality, status, progress,
-        external_id, match_method, batch_id, playlist_url, music_info_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?)`,
+        external_id, match_method, batch_id, playlist_url, music_info_json, file_size, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, NULL, ?, ?)`,
     )
     .run(
       id,
@@ -123,7 +169,7 @@ export function enqueueDownload(input: {
       input.matchMethod || 'id',
       input.batchId || null,
       input.playlistUrl || null,
-      JSON.stringify({ ...input.musicInfo, __downloadLyric: input.downloadLyric ?? settings.downloadLyric }),
+      JSON.stringify(musicPayload),
       ts,
       ts,
     )
@@ -136,13 +182,68 @@ export function cancelTask(id: string) {
   const task = getTask(id)
   if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
   cancelSet.add(id)
-  if (task.status === 'queued' || task.status === 'running') {
+
+  // 若刚好已完成：按约定删除成品文件并标为取消
+  if (task.status === 'completed') {
+    removeTaskFiles(task)
     getDb()
-      .prepare(`UPDATE download_tasks SET status='cancelled', updated_at=?, error=? WHERE id=?`)
+      .prepare(
+        `UPDATE download_tasks SET status='cancelled', updated_at=?, error=?, file_path=NULL, lyric_path=NULL, file_size=NULL WHERE id=?`,
+      )
+      .run(nowIso(), '用户取消（已完成文件已删除）', id)
+    emitTask(id)
+    return getTask(id)!
+  }
+
+  if (task.status === 'queued' || task.status === 'running') {
+    removeTaskFiles(task)
+    getDb()
+      .prepare(
+        `UPDATE download_tasks SET status='cancelled', updated_at=?, error=?, file_path=NULL, lyric_path=NULL, file_size=NULL WHERE id=?`,
+      )
       .run(nowIso(), '用户取消', id)
   }
   emitTask(id)
   return getTask(id)!
+}
+
+export function batchCancelTasks(ids: string[]) {
+  const items = []
+  for (const id of ids) {
+    try {
+      items.push(cancelTask(id))
+    } catch (e: any) {
+      items.push({ id, error: e?.message || String(e) })
+    }
+  }
+  return { count: ids.length, items }
+}
+
+/** 删除任务记录；可选删除本地音频与歌词 */
+export function deleteTask(id: string, opts?: { deleteLocalFiles?: boolean }) {
+  const task = getTask(id)
+  if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
+  if (task.status === 'running' || task.status === 'queued') {
+    throw createError({ statusCode: 400, statusMessage: '进行中的任务请先取消' })
+  }
+  if (opts?.deleteLocalFiles) removeTaskFiles(task)
+  getDb().prepare(`DELETE FROM download_tasks WHERE id=?`).run(id)
+  downloadEvents.emit('task', { ...task, status: 'deleted' })
+  return { ok: true, id }
+}
+
+export function batchDeleteTasks(ids: string[], opts?: { deleteLocalFiles?: boolean }) {
+  let deleted = 0
+  const errors: Array<{ id: string; error: string }> = []
+  for (const id of ids) {
+    try {
+      deleteTask(id, opts)
+      deleted += 1
+    } catch (e: any) {
+      errors.push({ id, error: e?.message || String(e) })
+    }
+  }
+  return { deleted, errors }
 }
 
 /** 失败/取消后整文件重试（不续传） */
@@ -152,25 +253,104 @@ export function retryTask(id: string, opts?: { resetAttempts?: boolean }) {
   if (task.status === 'running') {
     throw createError({ statusCode: 400, statusMessage: '任务进行中，请先取消再重试' })
   }
-  // 清理半成品文件
-  if (task.file_path && existsSync(task.file_path)) {
-    try {
-      unlinkSync(task.file_path)
-    } catch {
-      /* ignore */
-    }
-  }
+  removeTaskFiles(task)
   const settings = getSettings()
   ensureDiskWritable(settings.downloadDir)
   getDb()
     .prepare(
-      `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL,
+      `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL, file_size=NULL,
        attempts=?, updated_at=? WHERE id=?`,
     )
     .run(opts?.resetAttempts ? 0 : task.attempts, nowIso(), id)
   emitTask(id)
   kickWorker()
   return getTask(id)!
+}
+
+export function batchRetryTasks(ids: string[], opts?: { resetAttempts?: boolean }) {
+  const items = []
+  for (const id of ids) {
+    try {
+      items.push(retryTask(id, opts))
+    } catch (e: any) {
+      items.push({ id, error: e?.message || String(e) })
+    }
+  }
+  kickWorker()
+  return { count: ids.length, items }
+}
+
+/**
+ * 失败任务换源重试：切换到同平台其它可用音源并重新入队。
+ * 会记录已尝试音源，多次点击依次轮换。
+ */
+export function switchSourceAndRetry(id: string) {
+  const task = getTask(id)
+  if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
+  if (task.status === 'running' || task.status === 'queued') {
+    throw createError({ statusCode: 400, statusMessage: '任务进行中，请先取消再换源' })
+  }
+
+  const alts = listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
+  if (!alts.length) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `没有可用备源（平台 ${task.platform}）`,
+    })
+  }
+
+  let musicInfo: Record<string, any> = {}
+  try {
+    musicInfo = JSON.parse(task.music_info_json || '{}')
+  } catch {
+    musicInfo = {}
+  }
+  const tried: string[] = Array.isArray(musicInfo.__triedSources)
+    ? musicInfo.__triedSources.filter((x: unknown) => typeof x === 'string')
+    : []
+  if (task.source_id && !tried.includes(task.source_id)) tried.push(task.source_id)
+
+  const unused = alts.filter((s) => !tried.includes(s.id))
+  const next = (unused.length ? unused : alts)[0]!
+  const nextTried = [...new Set([...tried, next.id])]
+
+  removeTaskFiles(task)
+  const settings = getSettings()
+  ensureDiskWritable(settings.downloadDir)
+
+  getDb()
+    .prepare(
+      `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL, file_size=NULL,
+       source_id=?, attempts=0, music_info_json=?, updated_at=? WHERE id=?`,
+    )
+    .run(
+      next.id,
+      JSON.stringify({ ...musicInfo, __triedSources: nextTried }),
+      nowIso(),
+      id,
+    )
+  emitTask(id)
+  kickWorker()
+  const fresh = getTask(id)!
+  return {
+    task: fresh,
+    previousSourceId: task.source_id,
+    sourceId: next.id,
+    sourceName: next.name,
+  }
+}
+
+export function batchSwitchSourceAndRetry(ids: string[]) {
+  const items = []
+  for (const id of ids) {
+    try {
+      items.push(switchSourceAndRetry(id))
+    } catch (e: any) {
+      items.push({ id, error: e?.statusMessage || e?.message || String(e) })
+    }
+  }
+  kickWorker()
+  return { count: ids.length, items }
 }
 
 function updateTask(id: string, patch: Partial<DownloadTaskRow>) {
@@ -198,7 +378,7 @@ export function ensureDiskWritable(dir: string) {
 async function resolveUrl(task: DownloadTaskRow, quality: string) {
   const source = getSource(task.source_id!)
   if (!source?.local_path) throw new Error('音源文件缺失')
-  const handle = loadLxSource(source.local_path)
+  const handle = await loadLxSource(source.local_path)
   const available = handle.qualityMap[task.platform] || ['128k', '320k']
   const q = pickQuality(available, quality)
   const musicInfo = JSON.parse(task.music_info_json || '{}')
@@ -206,7 +386,12 @@ async function resolveUrl(task: DownloadTaskRow, quality: string) {
   return { url, quality: q }
 }
 
-async function downloadFile(url: string, dest: string, onProgress: (p: number) => void, taskId: string) {
+async function downloadFile(
+  url: string,
+  dest: string,
+  onProgress: (p: number, received: number, total: number) => void,
+  taskId: string,
+) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'miyin/0.1', Referer: 'https://www.google.com/' },
   })
@@ -226,10 +411,12 @@ async function downloadFile(url: string, dest: string, onProgress: (p: number) =
         return
       }
       received += chunk.length
-      if (total > 0) onProgress(Math.min(0.99, received / total))
+      if (total > 0) onProgress(Math.min(0.99, received / total), received, total)
+      else onProgress(Math.min(0.95, received / (received + 1024 * 1024)), received, 0)
     })
     await pipeline(nodeStream, out)
-    onProgress(1)
+    onProgress(1, received, total || received)
+    return { received, total: total || received }
   } catch (err) {
     try {
       out.close()
@@ -245,6 +432,7 @@ async function processTask(task: DownloadTaskRow) {
   const settings = getSettings()
   updateTask(task.id, { status: 'running', progress: 0.01, error: null })
   let filePath: string | null = null
+  let lyricPath: string | null = null
   try {
     ensureDiskWritable(settings.downloadDir)
     const musicInfo = JSON.parse(task.music_info_json || '{}')
@@ -252,27 +440,83 @@ async function processTask(task: DownloadTaskRow) {
     if (cancelSet.has(task.id)) throw new Error('cancelled')
 
     const dir = getDownloadDir(settings.downloadDir)
+    const trackNo = musicInfo.track || musicInfo.trackNo || musicInfo.tracknum || musicInfo.no
     const base = applyNameTemplate(settings.nameTemplate, {
       artist: task.artist,
       title: task.title,
       album: task.album || undefined,
+      platform: task.platform,
+      quality,
+      id: task.external_id || undefined,
+      track: trackNo,
     })
     const ext = guessExt(url, quality)
     filePath = join(dir, `${base}.${ext}`)
-    await downloadFile(url, filePath, (p) => updateTask(task.id, { progress: p, quality }), task.id)
+    await downloadFile(
+      url,
+      filePath,
+      (p, received, total) =>
+        updateTask(task.id, {
+          progress: p,
+          quality,
+          file_size: total > 0 ? total : received || null,
+        }),
+      task.id,
+    )
 
-    let lyricPath: string | null = null
-    if (musicInfo.__downloadLyric !== false && settings.downloadLyric) {
+    if (cancelSet.has(task.id)) throw new Error('cancelled')
+
+    let fileSize: number | null = null
+    try {
+      fileSize = statSync(filePath).size
+    } catch {
+      fileSize = null
+    }
+
+    const downloadLyric =
+      typeof musicInfo.__downloadLyric === 'boolean' ? musicInfo.__downloadLyric : settings.downloadLyric
+    const lyricMode =
+      musicInfo.__lyricMode === 'embedded' || musicInfo.__lyricMode === 'external'
+        ? musicInfo.__lyricMode
+        : settings.lyricMode
+
+    let lrcText: string | null = null
+    if (downloadLyric) {
       try {
-        const lrc = await fetchLyric(task.platform, musicInfo)
-        if (lrc) {
-          lyricPath = join(dir, `${base}.lrc`)
-          const { writeFileSync } = await import('node:fs')
-          writeFileSync(lyricPath, lrc, 'utf8')
-        }
+        lrcText = await fetchLyric(task.platform, musicInfo)
       } catch {
-        /* 歌词失败不阻断 */
+        lrcText = null
       }
+    }
+
+    if (lrcText && lyricMode === 'external') {
+      lyricPath = join(dir, `${base}.lrc`)
+      writeFileSync(lyricPath, lrcText, 'utf8')
+    }
+
+    // 元数据：基础字段 + 封面 +（仅内嵌模式）歌词
+    const metaResult = await writeAudioMetadata(
+      filePath,
+      {
+        title: task.title,
+        artist: task.artist,
+        album: task.album,
+        platform: task.platform,
+        quality,
+        external_id: task.external_id,
+      },
+      musicInfo,
+      lyricMode === 'embedded' ? lrcText : null,
+    )
+    if (!metaResult.ok && metaResult.reason) {
+      console.warn('[download] metadata:', metaResult.reason)
+    }
+
+    // 取消竞态：完成后才发现已取消 → 删文件
+    if (cancelSet.has(task.id)) {
+      removeFileQuiet(filePath)
+      removeFileQuiet(lyricPath)
+      throw new Error('cancelled')
     }
 
     updateTask(task.id, {
@@ -281,19 +525,21 @@ async function processTask(task: DownloadTaskRow) {
       file_path: filePath,
       lyric_path: lyricPath,
       quality,
+      file_size: fileSize,
       error: null,
     })
   } catch (err: any) {
     const msg = err?.message || String(err)
-    if (filePath && existsSync(filePath)) {
-      try {
-        unlinkSync(filePath)
-      } catch {
-        /* ignore */
-      }
-    }
+    removeFileQuiet(filePath)
+    removeFileQuiet(lyricPath)
     if (msg === 'cancelled' || cancelSet.has(task.id)) {
-      updateTask(task.id, { status: 'cancelled', error: '用户取消', file_path: null })
+      updateTask(task.id, {
+        status: 'cancelled',
+        error: '用户取消',
+        file_path: null,
+        lyric_path: null,
+        file_size: null,
+      })
       return
     }
     const attempts = (task.attempts || 0) + 1
@@ -316,11 +562,20 @@ async function processTask(task: DownloadTaskRow) {
         error: `失败重试(${attempts}/${settings2.maxAttempts}): ${msg}`,
         progress: 0,
         file_path: null,
+        lyric_path: null,
+        file_size: null,
       })
-      // 短暂延迟后 kick，避免狂打
       setTimeout(() => kickWorker(), 500)
     } else {
-      updateTask(task.id, { status: 'failed', attempts, error: msg, progress: 0, file_path: null })
+      updateTask(task.id, {
+        status: 'failed',
+        attempts,
+        error: msg,
+        progress: 0,
+        file_path: null,
+        lyric_path: null,
+        file_size: null,
+      })
     }
   } finally {
     cancelSet.delete(task.id)
@@ -361,7 +616,6 @@ export function kickWorker() {
 
 export function startDownloadWorker() {
   if (loopTimer) return
-  // 事件驱动为主，低频轮询兜底卡住的 queued
   loopTimer = setInterval(() => {
     void tickWorker()
   }, 8000)

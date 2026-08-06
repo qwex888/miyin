@@ -1,0 +1,112 @@
+#!/bin/bash
+# 觅音 Native 生命周期：start / stop / status
+# 参考：https://developer.fnnas.com/docs/examples/native/
+
+LOG_FILE="${TRIM_PKGVAR}/app.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+
+export PATH=/var/apps/nodejs_v22/target/bin:$PATH
+
+APP_DIR="${TRIM_APPDEST}/server"
+SOCKET_PATH="${TRIM_APPDEST}/app.sock"
+GATEWAY_PREFIX="/app/miyin"
+
+# TRIM_DATA_SHARE_PATHS 形如 path1:path2（声明顺序：data, downloads）
+IFS=':' read -r DATA_DIR DOWNLOAD_DIR _ <<<"${TRIM_DATA_SHARE_PATHS}"
+DATA_DIR="${DATA_DIR:-${TRIM_PKGVAR}/data}"
+DOWNLOAD_DIR="${DOWNLOAD_DIR:-${TRIM_PKGVAR}/downloads}"
+
+mkdir -p "$DATA_DIR" "$DOWNLOAD_DIR" "$TRIM_PKGVAR"
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+check_process() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
+}
+
+status_app() {
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+    if [ -n "$pid" ] && check_process "$pid"; then
+      return 0
+    fi
+    rm -f "$PID_FILE"
+  fi
+  return 1
+}
+
+start_app() {
+  if status_app; then
+    return 0
+  fi
+
+  log_msg "Starting Miyin..."
+  cd "$APP_DIR" || exit 1
+
+  AUTH_TOKEN="${AUTH_TOKEN:-changeme}" \
+  SESSION_SECRET="${SESSION_SECRET:-please-change-me}" \
+  DATA_DIR="$DATA_DIR" \
+  DOWNLOAD_DIR="$DOWNLOAD_DIR" \
+  GATEWAY_PREFIX="$GATEWAY_PREFIX" \
+  SOCKET_PATH="$SOCKET_PATH" \
+  HOST=127.0.0.1 \
+  PORT=39280 \
+  NODE_ENV=production \
+  node start.mjs >> "$LOG_FILE" 2>&1 &
+
+  echo "$!" > "$PID_FILE"
+}
+
+stop_app() {
+  log_msg "Stopping Miyin..."
+
+  if [ ! -f "$PID_FILE" ]; then
+    rm -f "$SOCKET_PATH"
+    return 0
+  fi
+
+  local pid
+  pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+
+  if [ -z "$pid" ] || ! check_process "$pid"; then
+    rm -f "$PID_FILE" "$SOCKET_PATH"
+    return 0
+  fi
+
+  kill -TERM "$pid" 2>> "$LOG_FILE" || true
+
+  local count=0
+  while check_process "$pid" && [ "$count" -lt 15 ]; do
+    sleep 1
+    count=$((count + 1))
+  done
+
+  if check_process "$pid"; then
+    kill -KILL "$pid" 2>> "$LOG_FILE" || true
+  fi
+
+  rm -f "$PID_FILE" "$SOCKET_PATH"
+}
+
+case "$1" in
+  start)
+    start_app
+    ;;
+  stop)
+    stop_app
+    ;;
+  status)
+    if status_app; then
+      exit 0
+    fi
+    exit 3
+    ;;
+  *)
+    echo "Unknown command: $1" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+    ;;
+esac

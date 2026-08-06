@@ -2,11 +2,12 @@
 const config = useRuntimeConfig()
 const route = useRoute()
 const { logout } = useAuth()
+const { activeCount, startWatching } = useDownloadBadge()
 
 const links = [
   { to: '/', label: '搜索' },
   { to: '/playlist', label: '歌单' },
-  { to: '/queue', label: '下载队列' },
+  { to: '/queue', label: '下载队列', badge: true },
   { to: '/sources', label: '音源管理' },
   { to: '/settings', label: '设置' },
 ]
@@ -14,6 +15,8 @@ const links = [
 function active(to: string) {
   return route.path === to
 }
+
+onMounted(() => startWatching())
 </script>
 
 <template>
@@ -28,6 +31,7 @@ function active(to: string) {
         :class="{ active: active(l.to) }"
       >
         {{ l.label }}
+        <span v-if="l.badge && activeCount > 0" class="badge">{{ activeCount > 99 ? '99+' : activeCount }}</span>
       </NuxtLink>
     </nav>
     <button class="btn btn-ghost" type="button" @click="logout">退出</button>
@@ -61,10 +65,26 @@ function active(to: string) {
   padding: 6px 10px;
   border-radius: 6px;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
 }
 .nav-link.active {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
+}
+.badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger, #dc2626);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
 }
 </style>

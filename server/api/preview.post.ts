@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
   for (const source of ordered as NonNullable<ReturnType<typeof getSource>>[]) {
     if (!source?.local_path) continue
     try {
-      const handle = loadLxSource(source.local_path)
+      const handle = await loadLxSource(source.local_path)
       const available = handle.qualityMap[body.platform] || ['128k', '320k']
       const quality = pickQuality(available, qualityPref)
       const url = await handle.getMusicUrl(body.platform, body.musicInfo, quality)

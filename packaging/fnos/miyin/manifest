@@ -1,9 +1,14 @@
-# App.Miyin — 飞牛 fnOS 应用骨架（二期完善）
-
-name: App.Miyin
-version: 0.1.0
-title: 觅音
-description: 多源音乐搜索与下载助手
-platform: x86
-os_min_version: 0.8.0
-category: multimedia
+appname=miyin
+version=0.2.0
+display_name=觅音
+desc=多源音乐搜索、试听与下载助手（洛雪音源兼容）。支持网易云 / QQ / 酷狗歌单导入。
+platform=all
+source=thirdparty
+maintainer=miyin
+distributor=miyin
+os_min_version=1.1.3100
+desktop_uidir=ui
+desktop_applaunchname=miyin.main
+install_dep_apps=nodejs_v22
+ctl_stop=true
+changelog=Native FPK：统一网关 Socket；歌单支持网易/QQ/酷狗与匹配确认。

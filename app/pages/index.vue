@@ -26,8 +26,21 @@ const loading = ref(false)
 const error = ref('')
 const quality = ref('highest')
 const withLyric = ref(true)
+const lyricMode = ref<'external' | 'embedded'>('external')
 const msg = ref('')
 const { play, current, toggle } = usePlayer()
+
+async function loadLyricDefaults() {
+  try {
+    const s = await $fetch<{ downloadLyric: boolean; lyricMode: 'external' | 'embedded' }>('/api/settings')
+    withLyric.value = s.downloadLyric
+    lyricMode.value = s.lyricMode || 'external'
+  } catch {
+    /* ignore */
+  }
+}
+
+onMounted(loadLyricDefaults)
 
 async function doSearch() {
   if (!keyword.value.trim()) return
@@ -100,9 +113,11 @@ async function download() {
         externalId: selected.value.externalId,
         matchMethod: 'id',
         downloadLyric: withLyric.value,
+        lyricMode: lyricMode.value,
       },
     })
     msg.value = '已加入下载队列'
+    useDownloadBadge().notifyChanged()
   } catch (e: any) {
     msg.value = e?.data?.statusMessage || e?.message || '入队失败'
   }
@@ -155,8 +170,7 @@ function fmtDur(sec: number) {
           :class="{ active: selected?.id === t.id }"
           @click="selected = t"
         >
-          <img v-if="t.cover" :src="t.cover" class="cover" alt="" />
-          <div v-else class="cover placeholder" />
+          <CoverImage :src="t.cover" class="cover" :alt="t.title" />
           <div class="meta">
             <div class="title">{{ t.title }}</div>
             <div class="muted">{{ t.artist }} · {{ fmtDur(t.duration) }}</div>
@@ -167,8 +181,7 @@ function fmtDur(sec: number) {
 
       <div class="card detail">
         <template v-if="selected">
-          <img v-if="selected.cover" :src="selected.cover" class="detail-cover" alt="" />
-          <div v-else class="detail-cover placeholder" />
+          <CoverImage :src="selected.cover" class="detail-cover" :alt="selected.title" :lazy="false" />
           <h2>{{ selected.title }}</h2>
           <p class="muted">{{ selected.artist }}</p>
           <p class="muted">专辑：{{ selected.album || '—' }}</p>
@@ -186,6 +199,13 @@ function fmtDur(sec: number) {
           <label class="check">
             <input v-model="withLyric" type="checkbox" />
             同时下载歌词
+          </label>
+          <label v-if="withLyric" class="field">
+            <span>歌词写入</span>
+            <select v-model="lyricMode" class="select">
+              <option value="external">仅外部 .lrc</option>
+              <option value="embedded">仅内嵌到音频</option>
+            </select>
           </label>
           <div class="actions">
             <button class="btn btn-ghost" type="button" @click="preview">试听</button>
@@ -262,16 +282,14 @@ function fmtDur(sec: number) {
   width: 48px;
   height: 48px;
   border-radius: 6px;
-  object-fit: cover;
+  flex-shrink: 0;
+  overflow: hidden;
   background: #ecfdf5;
 }
 .detail-cover {
   width: 100%;
   height: 180px;
   margin-bottom: 8px;
-}
-.placeholder {
-  background: #ecfdf5;
 }
 .title {
   font-weight: 600;

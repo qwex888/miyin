@@ -2,8 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
-import { parseSourceText } from './sourceImport'
-import { loadLxSource } from './sourceRuntime'
+import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceImport'
+import {
+  acquireSourceRejectionGuard,
+  loadLxSource,
+  settleSourceNetworkErrors,
+} from './sourceRuntime'
 
 export type SourceRow = {
   id: string
@@ -36,6 +40,19 @@ export function getSource(id: string): SourceRow | undefined {
   return getDb().prepare('SELECT * FROM sources WHERE id = ?').get(id) as SourceRow | undefined
 }
 
+export function findSourceByUrl(url: string): SourceRow | undefined {
+  return getDb().prepare('SELECT * FROM sources WHERE url = ?').get(url) as SourceRow | undefined
+}
+
+export function findSourceByName(name: string): SourceRow | undefined {
+  return getDb().prepare('SELECT * FROM sources WHERE name = ?').get(name) as SourceRow | undefined
+}
+
+function existingNameSet(): Set<string> {
+  const rows = getDb().prepare('SELECT name FROM sources').all() as Array<{ name: string }>
+  return new Set(rows.map((r) => r.name))
+}
+
 export async function fetchSourceScript(url: string): Promise<string> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 20000)
@@ -53,8 +70,18 @@ export async function fetchSourceScript(url: string): Promise<string> {
   }
 }
 
-export async function upsertSourceFromRemote(input: { name: string; url: string; mirrorUrl?: string }) {
+async function persistSource(input: {
+  name: string
+  url: string
+  mirrorUrl?: string
+  allowUpdate: boolean
+}): Promise<SourceRow> {
   const id = idFromUrl(input.url)
+  const existing = getSource(id)
+  if (existing && !input.allowUpdate) {
+    throw createError({ statusCode: 409, statusMessage: '该音源 URL 已存在' })
+  }
+
   const script = await fetchSourceScript(input.mirrorUrl || input.url)
   const localPath = getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
@@ -62,17 +89,25 @@ export async function upsertSourceFromRemote(input: { name: string; url: string;
   let platforms: string[] = []
   let status = 'unknown'
   let lastError: string | null = null
+  const guard = acquireSourceRejectionGuard()
   try {
-    const handle = loadLxSource(localPath)
+    const handle = await loadLxSource(localPath, { bypassCache: true })
     platforms = handle.platforms
-    status = 'ok'
+    const netErrs = await settleSourceNetworkErrors(guard)
+    if (netErrs.length) {
+      status = 'dead'
+      lastError = `更新检测失败: ${netErrs[0]!.message}`
+    } else {
+      status = 'ok'
+    }
   } catch (err: any) {
     status = 'dead'
     lastError = err?.message || String(err)
+  } finally {
+    guard.release()
   }
 
   const ts = nowIso()
-  const existing = getSource(id)
   if (existing) {
     getDb()
       .prepare(
@@ -113,21 +148,98 @@ export async function upsertSourceFromRemote(input: { name: string; url: string;
   return getSource(id)!
 }
 
+/**
+ * 手动新增：URL 全量精确匹配已存在 → 报错；名称已存在 → 报错。
+ * 刷新/检测场景请用 upsertSourceFromRemote。
+ */
+export async function addSource(input: { name: string; url: string; mirrorUrl?: string }) {
+  const url = input.url.trim()
+  const name = cleanSourceName(input.name)
+  if (!url || !name || name === 'unnamed') {
+    throw createError({ statusCode: 400, statusMessage: 'name/url 必填' })
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    throw createError({ statusCode: 400, statusMessage: 'URL 需以 http(s):// 开头' })
+  }
+
+  if (findSourceByUrl(url)) {
+    throw createError({ statusCode: 409, statusMessage: '该音源 URL 已存在' })
+  }
+  if (findSourceByName(name)) {
+    throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+  }
+
+  return await persistSource({ name, url, mirrorUrl: input.mirrorUrl, allowUpdate: false })
+}
+
+/** 按 URL 写入或更新（检测/重新拉取脚本用） */
+export async function upsertSourceFromRemote(input: { name: string; url: string; mirrorUrl?: string }) {
+  return await persistSource({
+    name: input.name,
+    url: input.url,
+    mirrorUrl: input.mirrorUrl,
+    allowUpdate: true,
+  })
+}
+
+/**
+ * 批量导入：
+ * - URL 全量精确匹配已存在或本批重复 → 自动跳过
+ * - 名称冲突但 URL 不同 → 自动改名为「名称 (2)」…
+ */
 export async function importSourcesText(text: string) {
   const parsed = parseSourceText(text)
   if (!parsed.length) {
     throw createError({ statusCode: 400, statusMessage: '未解析到任何音源 URL' })
   }
-  const results = []
+
+  const takenNames = existingNameSet()
+  const seenUrls = new Set(listSources().map((s) => s.url))
+  const results: Array<Record<string, any>> = []
+  let skipped = 0
+  let renamed = 0
+
   for (const item of parsed) {
+    if (seenUrls.has(item.url)) {
+      skipped += 1
+      results.push({
+        ok: false,
+        skipped: true,
+        name: item.name,
+        url: item.url,
+        error: 'URL 已存在，已跳过',
+      })
+      continue
+    }
+
+    const finalName = allocateUniqueName(item.name, takenNames)
+    if (finalName !== item.name) renamed += 1
+
     try {
-      const row = await upsertSourceFromRemote(item)
-      results.push({ ok: true, source: row })
+      const row = await persistSource({
+        name: finalName,
+        url: item.url,
+        allowUpdate: false,
+      })
+      seenUrls.add(item.url)
+      takenNames.add(finalName)
+      results.push({
+        ok: true,
+        source: row,
+        renamed: finalName !== item.name ? finalName : undefined,
+      })
     } catch (err: any) {
       results.push({ ok: false, name: item.name, url: item.url, error: err?.message || String(err) })
     }
   }
-  return { total: parsed.length, results }
+
+  return {
+    total: parsed.length,
+    imported: results.filter((r) => r.ok).length,
+    skipped,
+    renamed,
+    results,
+  }
 }
 
 export function updateSource(id: string, patch: { enabled?: boolean }) {
@@ -161,23 +273,40 @@ export async function checkSources(ids?: string[]) {
   const out = []
   for (const row of rows) {
     const ts = nowIso()
+    const guard = acquireSourceRejectionGuard()
     try {
       if (!row.local_path || !existsSync(row.local_path)) {
         await upsertSourceFromRemote({ name: row.name, url: row.url, mirrorUrl: row.mirror_url || undefined })
+        // upsert 已写入 status；再读一次供返回
+        const latest = getSource(row.id)
+        out.push({ id: row.id, status: latest?.status || 'unknown', error: latest?.last_error || undefined })
       } else {
-        const handle = loadLxSource(row.local_path)
-        getDb()
-          .prepare(
-            `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
-          )
-          .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
+        const handle = await loadLxSource(row.local_path, { bypassCache: true })
+        const netErrs = await settleSourceNetworkErrors(guard)
+        if (netErrs.length) {
+          const msg = `更新检测失败: ${netErrs[0]!.message}`
+          getDb()
+            .prepare(
+              `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+            )
+            .run('dead', JSON.stringify(handle.platforms), ts, msg, ts, row.id)
+          out.push({ id: row.id, status: 'dead', error: msg })
+        } else {
+          getDb()
+            .prepare(
+              `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+            )
+            .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
+          out.push({ id: row.id, status: 'ok' })
+        }
       }
-      out.push({ id: row.id, status: 'ok' })
     } catch (err: any) {
       getDb()
         .prepare(`UPDATE sources SET status=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`)
         .run('dead', ts, err?.message || String(err), ts, row.id)
       out.push({ id: row.id, status: 'dead', error: err?.message || String(err) })
+    } finally {
+      guard.release()
     }
   }
   return out
@@ -203,5 +332,4 @@ export function listEnabledOkSources(platform?: string) {
   })
 }
 
-// silence unused import if any
 void randomUUID

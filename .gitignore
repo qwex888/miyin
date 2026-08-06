@@ -26,3 +26,7 @@ logs
 # Runtime data
 data/
 downloads/
+
+# 飞牛 FPK 构建产物
+packaging/fnos/miyin/app/server/
+*.fpk

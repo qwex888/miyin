@@ -18,23 +18,24 @@ pnpm dev
 pnpm test      # 单元测试
 pnpm build     # 生产构建
 pnpm preview   # 预览构建产物
-docker compose up -d --build
+pnpm build:fpk # 准备飞牛 Native FPK（需 fnpack）
+docker compose up -d --build   # 可选：非飞牛 Docker 部署
 ```
 
-## 一期能力
+## 能力
 
-- 音源批量导入 / 检测 / 清理（洛雪兼容 JS，沙箱超时/熔断）
-- 按平台 Tab 搜索（网易 / 酷我 / 酷狗 / QQ，短缓存）
-- 左列表 + 右详情、试听（多源换源）、入队下载
-- 队列：进行中 / 已完成 / 失败，失败可重试（磁盘满/断网等，不做断点续传）
-- SSE 实时进度、歌单导入（网易云）
+- 音源批量导入 / 检测 / 清理（洛雪兼容 JS，沙箱超时/熔断）；同名自动 `(2)`；URL 精确去重
+- 按平台 Tab 搜索（网易 / 酷我 / 酷狗 / QQ）
+- 左列表 + 右详情、试听、入队下载；封面懒加载
+- 队列：进行中 / 已完成 / 失败，SSE 进度，失败可重试
+- 歌单导入：网易云 / QQ / 酷狗；多选下载；低分匹配人工确认
 - 可选歌词、Token 鉴权、设置页
+- 飞牛 **Native** `.fpk`：见 [packaging/fnos/README.md](packaging/fnos/README.md)
 
 ## 说明
 
 - 洛雪音源脚本主要用于**取直链**；搜索由服务端平台适配完成。
 - 与知音弱联动：把「下载目录」设为知音扫描目录即可。
-- 飞牛 `.fpk`：见 `packaging/fnos/README.md`（二期）。
 
 ## 验收清单
 
@@ -44,3 +45,6 @@ docker compose up -d --build
 - [ ] 下载落盘，可选歌词
 - [ ] 失败可换源/重试
 - [ ] 无 Token 访问 API 返回 401
+- [ ] 歌单解析（网易/QQ/酷狗）与选中下载
+- [ ] 低分匹配可人工确认
+- [ ] `pnpm build:fpk` 可产出可安装包（或准备好 `app/server`）

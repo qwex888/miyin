@@ -26,7 +26,7 @@ async function submit() {
     <form class="card login-card" @submit.prevent="submit">
       <h1>{{ config.public.appName }}</h1>
       <p class="muted">输入访问口令（默认见 AUTH_TOKEN / .env）</p>
-      <input v-model="token" class="input" type="password" placeholder="Token" autocomplete="current-password" />
+      <input v-model="token" class="input" type="password" data="passworedtype" placeholder="Token" autocomplete="current-password" />
       <p v-if="error" class="err">{{ error }}</p>
       <button class="btn" type="submit" :disabled="loading || !token">登录</button>
     </form>

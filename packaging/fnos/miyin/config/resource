@@ -1,0 +1,18 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "miyin/data",
+        "permission": {
+          "rw": ["miyin"]
+        }
+      },
+      {
+        "name": "miyin/downloads",
+        "permission": {
+          "rw": ["miyin"]
+        }
+      }
+    ]
+  }
+}

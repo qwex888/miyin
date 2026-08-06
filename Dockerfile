@@ -14,7 +14,10 @@ RUN pnpm build
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV HOST=0.0.0.0 PORT=3000 NODE_ENV=production
-RUN corepack enable
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./

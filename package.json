@@ -8,9 +8,11 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh"
   },
   "dependencies": {
+    "@tanstack/vue-virtual": "^3.13.35",
     "better-sqlite3": "^13.0.3",
     "nuxt": "^4.5.1",
     "vue": "^3.5.40",

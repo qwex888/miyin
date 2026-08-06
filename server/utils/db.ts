@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS download_tasks (
   batch_id TEXT,
   playlist_url TEXT,
   music_info_json TEXT,
+  file_size INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -57,7 +58,16 @@ export function openDb(dataDir?: string) {
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
   db.exec(SCHEMA)
+  migrateSchema(db)
   return db
+}
+
+function migrateSchema(db: Database.Database) {
+  const cols = db.prepare(`PRAGMA table_info(download_tasks)`).all() as Array<{ name: string }>
+  const names = new Set(cols.map((c) => c.name))
+  if (!names.has('file_size')) {
+    db.exec(`ALTER TABLE download_tasks ADD COLUMN file_size INTEGER`)
+  }
 }
 
 export function getDb() {

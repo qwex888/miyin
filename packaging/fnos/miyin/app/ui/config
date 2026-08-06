@@ -1,0 +1,14 @@
+{
+  ".url": {
+    "miyin.main": {
+      "title": "觅音",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/miyin",
+      "gatewaySocket": "app.sock",
+      "url": "/app/miyin",
+      "allUsers": true
+    }
+  }
+}
