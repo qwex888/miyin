@@ -10,7 +10,7 @@ pnpm install
 pnpm dev
 ```
 
-浏览器打开 http://localhost:3000 ，默认口令 `changeme`（可用 `AUTH_TOKEN` 修改）。
+浏览器打开 http://localhost:18980 ，默认口令 `changeme`（可用 `AUTH_TOKEN` 修改）。
 
 ## 常用命令
 
@@ -31,6 +31,7 @@ docker compose up -d --build   # 可选：非飞牛 Docker 部署
 - 歌单导入：网易云 / QQ / 酷狗；多选下载；低分匹配人工确认
 - 可选歌词、Token 鉴权、设置页
 - 飞牛 **Native** `.fpk`：见 [packaging/fnos/README.md](packaging/fnos/README.md)
+- 品牌标：概念二「M 波下探」（`public/logo.svg`）；重导图标：`bash scripts/render-brand-assets.sh`
 
 ## 说明
 

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-const config = useRuntimeConfig()
 const route = useRoute()
 const { logout } = useAuth()
 const { activeCount, startWatching } = useDownloadEvents()
@@ -28,7 +27,9 @@ onMounted(() => startWatching())
 
 <template>
   <header class="header">
-    <div class="brand">{{ config.public.appName }}</div>
+    <NuxtLink to="/" class="brand-link" aria-label="觅音首页">
+      <BrandLogo :size="28" />
+    </NuxtLink>
     <nav class="nav">
       <NuxtLink
         v-for="l in links"
@@ -82,10 +83,11 @@ onMounted(() => startWatching())
   z-index: 20;
   backdrop-filter: blur(10px);
 }
-.brand {
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--accent);
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  color: inherit;
   min-width: 64px;
 }
 .nav {

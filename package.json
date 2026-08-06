@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "build": "nuxt build",
-    "dev": "nuxt dev",
+    "dev": "nuxt dev --port 18980",
     "generate": "nuxt generate",
-    "preview": "nuxt preview",
+    "preview": "nuxt preview --port 18980",
     "postinstall": "nuxt prepare",
     "test": "vitest run",
     "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh"

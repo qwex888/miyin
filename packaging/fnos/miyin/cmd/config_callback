@@ -1,0 +1,22 @@
+#!/bin/bash
+### 配置变更后：更新 miyin.env；若服务在跑则重启以加载新配置。
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib_config.sh"
+
+if ! miyin_write_config_from_wizard; then
+  exit 1
+fi
+
+if [ -x "$SCRIPT_DIR/main" ]; then
+  if "$SCRIPT_DIR/main" status >/dev/null 2>&1; then
+    "$SCRIPT_DIR/main" stop || true
+    "$SCRIPT_DIR/main" start || {
+      echo "配置已保存，但服务重启失败，请手动启动" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+      exit 1
+    }
+  fi
+fi
+
+exit 0

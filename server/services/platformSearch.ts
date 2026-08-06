@@ -16,7 +16,7 @@ export type SearchTrack = {
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-async function fetchJson(url: string, init?: RequestInit) {
+async function fetchText(url: string, init?: RequestInit) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15000)
   try {
@@ -29,9 +29,41 @@ async function fetchJson(url: string, init?: RequestInit) {
       },
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.json()
+    return await res.text()
   } finally {
     clearTimeout(timer)
+  }
+}
+
+async function fetchJson(url: string, init?: RequestInit) {
+  const text = await fetchText(url, init)
+  return parseLooseJson(text)
+}
+
+/**
+ * 酷我等接口常返回单引号「伪 JSON」（{'a':'b'}），标准 JSON.parse 会在 position 1 报错。
+ * 亦兼容 JSONP / try{var jsondata=...} 包装。
+ */
+export function parseLooseJson(raw: string): any {
+  let text = String(raw || '').trim()
+  if (!text) throw new Error('空响应')
+
+  // JSONP / 酷我旧客户端: try{var jsondata={...};} / callback({...})
+  const jsonp = text.match(/^[a-zA-Z_$][\w$]*\s*\(([\s\S]*)\)\s*;?\s*$/)
+  if (jsonp) text = jsonp[1]!.trim()
+  const kwWrap = text.match(/^\s*try\s*\{\s*var\s+\w+\s*=\s*([\s\S]*?)\s*;?\s*\}\s*(catch[\s\S]*)?$/i)
+  if (kwWrap) text = kwWrap[1]!.trim()
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    // 单引号 → 双引号（酷我 r.s 当前格式；值内极少含未转义单引号）
+    const normalized = text.replace(/'/g, '"')
+    try {
+      return JSON.parse(normalized)
+    } catch (err: any) {
+      throw new Error(`响应不是合法 JSON: ${err?.message || err}`)
+    }
   }
 }
 
@@ -237,9 +269,13 @@ export async function searchPlatform(platform: string, keyword: string, page = 1
     searchCache.set(key, { at: Date.now(), items })
     return items
   } catch (err: any) {
+    // statusMessage 只能是短英文 reason phrase；详情放 message，避免出现「502 (): ...」
+    const detail = String(err?.message || err || 'unknown')
     throw createError({
       statusCode: 502,
-      statusMessage: `搜索失败(${PLATFORM_LABELS[platform] || platform}): ${err?.message || err}`,
+      statusMessage: 'Bad Gateway',
+      message: `搜索失败(${PLATFORM_LABELS[platform] || platform}): ${detail}`,
+      data: { platform, reason: detail },
     })
   }
 }

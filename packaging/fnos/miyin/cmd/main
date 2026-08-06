@@ -2,6 +2,10 @@
 # 觅音 Native 生命周期：start / stop / status
 # 参考：https://developer.fnnas.com/docs/examples/native/
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib_config.sh"
+
 LOG_FILE="${TRIM_PKGVAR}/app.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 
@@ -10,11 +14,22 @@ export PATH=/var/apps/nodejs_v22/target/bin:$PATH
 APP_DIR="${TRIM_APPDEST}/server"
 SOCKET_PATH="${TRIM_APPDEST}/app.sock"
 GATEWAY_PREFIX="/app/miyin"
+# 仅本机反代用；统一网关对外无独立 HTTP 端口
+INTERNAL_PORT=18980
+
+miyin_load_config
 
 # TRIM_DATA_SHARE_PATHS 形如 path1:path2（声明顺序：data, downloads）
-IFS=':' read -r DATA_DIR DOWNLOAD_DIR _ <<<"${TRIM_DATA_SHARE_PATHS}"
+IFS=':' read -r DATA_DIR SHARE_DOWNLOAD_DIR _ <<<"${TRIM_DATA_SHARE_PATHS}"
 DATA_DIR="${DATA_DIR:-${TRIM_PKGVAR}/data}"
-DOWNLOAD_DIR="${DOWNLOAD_DIR:-${TRIM_PKGVAR}/downloads}"
+if [ "${DOWNLOAD_MODE:-default}" = "custom" ] && [ -n "${CUSTOM_DOWNLOAD_DIR:-}" ]; then
+  DOWNLOAD_DIR="$CUSTOM_DOWNLOAD_DIR"
+else
+  DOWNLOAD_DIR="${SHARE_DOWNLOAD_DIR:-${TRIM_PKGVAR}/downloads}"
+fi
+
+AUTH_TOKEN="${AUTH_TOKEN:-changeme}"
+SESSION_SECRET="${SESSION_SECRET:-}"
 
 mkdir -p "$DATA_DIR" "$DOWNLOAD_DIR" "$TRIM_PKGVAR"
 
@@ -44,17 +59,33 @@ start_app() {
     return 0
   fi
 
+  if [ -z "$SESSION_SECRET" ]; then
+    echo "缺少 SESSION_SECRET，请重新运行安装/配置向导" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    return 1
+  fi
+
+  if [ ! -d "$DOWNLOAD_DIR" ]; then
+    mkdir -p "$DOWNLOAD_DIR" 2>/dev/null || {
+      echo "无法创建下载目录: $DOWNLOAD_DIR" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+      return 1
+    }
+  fi
+  if [ ! -w "$DOWNLOAD_DIR" ]; then
+    echo "下载目录不可写: $DOWNLOAD_DIR" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    return 1
+  fi
+
   log_msg "Starting Miyin..."
   cd "$APP_DIR" || exit 1
 
-  AUTH_TOKEN="${AUTH_TOKEN:-changeme}" \
-  SESSION_SECRET="${SESSION_SECRET:-please-change-me}" \
+  AUTH_TOKEN="$AUTH_TOKEN" \
+  SESSION_SECRET="$SESSION_SECRET" \
   DATA_DIR="$DATA_DIR" \
   DOWNLOAD_DIR="$DOWNLOAD_DIR" \
   GATEWAY_PREFIX="$GATEWAY_PREFIX" \
   SOCKET_PATH="$SOCKET_PATH" \
   HOST=127.0.0.1 \
-  PORT=39280 \
+  PORT="$INTERNAL_PORT" \
   NODE_ENV=production \
   node start.mjs >> "$LOG_FILE" 2>&1 &
 

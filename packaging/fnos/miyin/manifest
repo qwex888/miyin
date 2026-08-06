@@ -11,4 +11,4 @@ desktop_uidir=ui
 desktop_applaunchname=miyin.main
 install_dep_apps=nodejs_v22
 ctl_stop=true
-changelog=Native FPK：统一网关 Socket；歌单支持网易/QQ/酷狗与匹配确认。
+changelog=安装向导（口令/下载目录）、SESSION_SECRET 自动生成、x86+arm 胖包；本地默认端口 18980。

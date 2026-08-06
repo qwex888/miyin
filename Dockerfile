@@ -13,7 +13,7 @@ RUN pnpm build
 
 FROM node:22-bookworm-slim
 WORKDIR /app
-ENV HOST=0.0.0.0 PORT=3000 NODE_ENV=production
+ENV HOST=0.0.0.0 PORT=18980 NODE_ENV=production
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg \
   && rm -rf /var/lib/apt/lists/* \
@@ -23,5 +23,5 @@ COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 RUN mkdir -p /data /downloads
 VOLUME ["/data", "/downloads"]
-EXPOSE 3000
+EXPOSE 18980
 CMD ["node", ".output/server/index.mjs"]

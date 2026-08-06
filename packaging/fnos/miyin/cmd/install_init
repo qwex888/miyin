@@ -1,0 +1,21 @@
+#!/bin/bash
+### 安装前调用（fnpack create 必需脚本）
+### 检查运行时依赖是否可用。
+
+NODE_BIN=/var/apps/nodejs_v22/target/bin/node
+
+if [ ! -x "$NODE_BIN" ]; then
+  echo "未找到 nodejs_v22 运行时（$NODE_BIN）。请先在应用中心安装「Node.js v22」依赖后再安装觅音。" \
+    >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+  exit 1
+fi
+
+# ffmpeg 非硬依赖：缺失时仍可下载音频，但会跳过元数据/封面/内嵌歌词写入
+if ! command -v ffmpeg >/dev/null 2>&1 \
+  && [ ! -x /usr/bin/ffmpeg ] \
+  && [ ! -x /usr/local/bin/ffmpeg ]; then
+  echo "警告: 未检测到 ffmpeg，安装后建议在系统中安装 ffmpeg 以便写入音频元数据。" \
+    >>"${TRIM_TEMP_LOGFILE:-/dev/null}" 2>/dev/null || true
+fi
+
+exit 0

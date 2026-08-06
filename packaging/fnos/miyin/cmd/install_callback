@@ -1,0 +1,12 @@
+#!/bin/bash
+### 安装完成后：根据向导写入配置，自动生成 SESSION_SECRET。
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib_config.sh"
+
+if ! miyin_write_config_from_wizard; then
+  exit 1
+fi
+
+exit 0

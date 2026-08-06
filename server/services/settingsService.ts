@@ -6,7 +6,7 @@ import { getDownloadDir } from '../utils/paths'
 export const AppSettingsSchema = z.object({
   downloadDir: z.string().min(1),
   defaultQuality: z.enum(['highest', 'flac', '320k', '128k']).default('highest'),
-  concurrency: z.number().int().min(1).max(5).default(2),
+  concurrency: z.number().int().min(1).max(5).default(1),
   downloadLyric: z.boolean().default(true),
   /** external=仅 .lrc；embedded=仅内嵌到音频 */
   lyricMode: z.enum(['external', 'embedded']).default('external'),
@@ -30,7 +30,7 @@ export const NAME_TEMPLATE_VARS = [
 const DEFAULTS: AppSettings = {
   downloadDir: process.env.DOWNLOAD_DIR || './downloads',
   defaultQuality: 'highest',
-  concurrency: 2,
+  concurrency: 1,
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',

@@ -1,0 +1,5 @@
+#!/bin/bash
+### 卸载完成后调用。
+### 用户数据在 data-share（miyin/data、miyin/downloads），由系统按策略保留/清理，此处不做强制删除。
+
+exit 0

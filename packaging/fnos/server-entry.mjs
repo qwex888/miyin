@@ -2,6 +2,7 @@
 /**
  * 飞牛 Native 入口：Nitro 监听本机 TCP，Unix Socket 反向代理到网关。
  * 当前 Nuxt/Nitro 运行时未稳定暴露 NITRO_UNIX_SOCKET，故用此包装。
+ * better-sqlite3@13+ 通过包内 prebuilds/ 按 platform+arch 自动加载（胖包双架构）。
  */
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -13,7 +14,7 @@ import { createConnection } from 'node:net'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SOCKET_PATH = process.env.SOCKET_PATH || process.env.NITRO_UNIX_SOCKET || ''
 const HOST = process.env.HOST || '127.0.0.1'
-const PORT = Number(process.env.PORT || process.env.NITRO_PORT || 39280)
+const PORT = Number(process.env.PORT || process.env.NITRO_PORT || 18980)
 const SERVER_ENTRY = join(__dirname, '.output', 'server', 'index.mjs')
 
 function waitPort(host, port, timeoutMs = 30000) {

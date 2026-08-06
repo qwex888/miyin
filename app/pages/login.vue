@@ -5,7 +5,6 @@ const token = ref('')
 const error = ref('')
 const loading = ref(false)
 const { login } = useAuth()
-const config = useRuntimeConfig()
 const { mode, cycle } = useTheme()
 
 const themeTitle = computed(() => {
@@ -51,7 +50,7 @@ async function submit() {
     </button>
     <form class="card login-card" @submit.prevent="submit">
       <div class="brand-block">
-        <h1>{{ config.public.appName }}</h1>
+        <BrandLogo :size="48" />
         <p class="muted">输入访问口令继续</p>
       </div>
       <label class="field">
@@ -89,11 +88,10 @@ async function submit() {
   padding: 24px;
   box-shadow: var(--shadow);
 }
-.brand-block h1 {
-  margin: 0 0 4px;
-  font-size: 1.5rem;
-  letter-spacing: -0.03em;
-  color: var(--accent);
+.brand-block {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
 }
 .brand-block .muted {
   margin: 0;

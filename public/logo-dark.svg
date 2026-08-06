@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="觅音 Miyin M 波下探字母标（深色）">
+  <!--
+    觅音 Miyin · 概念二「M 波下探」字母文字标 · 深色版
+    设计令牌：主 hsl(166 72% 42%)（≈#1e94b8）/ 亮青 #2dd4bf / 透明底
+    几何与浅色版完全一致，仅替换 stroke/fill 色值
+  -->
+  <!-- 左竖笔（左峰最高） -->
+  <path d="M11 47 L11 13" fill="none" stroke="hsl(166 72% 42%)" stroke-width="6" stroke-linecap="round"/>
+  <!-- 中段 V 形 = 下潜通道（亮青 #2dd4bf） -->
+  <path d="M11 13 L31 39 L49 25" fill="none" stroke="#2dd4bf" stroke-width="6" stroke-linecap="round"/>
+  <!-- 右竖笔（右峰更低，末端为箭头杆） -->
+  <path d="M49 25 L49 47" fill="none" stroke="hsl(166 72% 42%)" stroke-width="6" stroke-linecap="round"/>
+  <!-- 向下箭头缺口（亮青 #2dd4bf） -->
+  <path d="M43 47 L55 47 L49 55 Z" fill="#2dd4bf"/>
+</svg>

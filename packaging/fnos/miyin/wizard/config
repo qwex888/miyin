@@ -1,0 +1,66 @@
+[
+  {
+    "stepTitle": "访问与鉴权",
+    "items": [
+      {
+        "type": "password",
+        "field": "wizard_auth_token",
+        "label": "访问口令（AUTH_TOKEN）",
+        "initValue": "",
+        "rules": [
+          {
+            "required": true,
+            "message": "请设置访问口令"
+          },
+          {
+            "min": 6,
+            "message": "口令至少 6 位"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "修改后将写入配置并重启服务。SESSION_SECRET 保持安装时生成的值不变。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "下载目录",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_download_mode",
+        "label": "下载目录方式",
+        "initValue": "default",
+        "options": [
+          {
+            "label": "默认（使用共享目录 miyin/downloads）",
+            "value": "default"
+          },
+          {
+            "label": "自定义绝对路径（如音乐库挂载点）",
+            "value": "custom"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请选择下载目录方式"
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_download_dir",
+        "label": "自定义下载目录（绝对路径）",
+        "initValue": "",
+        "rules": [
+          {
+            "pattern": "^$|^/.*",
+            "message": "请填写以 / 开头的绝对路径，或留空（默认模式）"
+          }
+        ]
+      }
+    ]
+  }
+]

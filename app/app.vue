@@ -1,7 +1,26 @@
 <script setup lang="ts">
 const route = useRoute()
+const config = useRuntimeConfig()
 
 useHead({
+  title: () => config.public.appName,
+  link: [
+    {
+      rel: 'icon',
+      type: 'image/svg+xml',
+      href: () => {
+        const base = config.app.baseURL || '/'
+        return `${base.endsWith('/') ? base : `${base}/`}favicon.svg`
+      },
+    },
+    {
+      rel: 'apple-touch-icon',
+      href: () => {
+        const base = config.app.baseURL || '/'
+        return `${base.endsWith('/') ? base : `${base}/`}logo-192.png`
+      },
+    },
+  ],
   script: [
     {
       key: 'theme-init',
