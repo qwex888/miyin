@@ -1,0 +1,16 @@
+services:
+  miyin:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      AUTH_TOKEN: changeme
+      SESSION_SECRET: please-change-me
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      HOST: 0.0.0.0
+      PORT: 3000
+    volumes:
+      - ./data:/data
+      - ./downloads:/downloads
+    restart: unless-stopped
