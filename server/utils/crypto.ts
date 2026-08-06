@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto'
 
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+/** 会话默认 7 天（与 Cookie maxAge 对齐） */
+export const SESSION_MAX_AGE_SEC = 7 * 24 * 60 * 60
+const SESSION_TTL_MS = SESSION_MAX_AGE_SEC * 1000
 
 export function createSessionToken(secret: string) {
   const exp = Date.now() + SESSION_TTL_MS

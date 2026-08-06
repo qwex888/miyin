@@ -229,6 +229,12 @@ function fmtDur(sec: number) {
   gap: 8px;
   margin-bottom: 12px;
 }
+.search-bar .input {
+  flex: 1;
+}
+.search-bar .btn {
+  min-width: 100px;
+}
 .tabs {
   display: flex;
   gap: 8px;
@@ -284,7 +290,7 @@ function fmtDur(sec: number) {
   border-radius: 6px;
   flex-shrink: 0;
   overflow: hidden;
-  background: #ecfdf5;
+  background: var(--accent-soft);
 }
 .detail-cover {
   width: 100%;
@@ -334,6 +340,6 @@ function fmtDur(sec: number) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow);
 }
 </style>

@@ -551,7 +551,7 @@ onBeforeUnmount(() => {
   line-height: 1;
   padding: 3px 7px;
   border-radius: 999px;
-  background: #f3f4f6;
+  background: hsl(var(--muted-bg));
   color: var(--muted);
 }
 .badge-running {
@@ -559,20 +559,20 @@ onBeforeUnmount(() => {
   color: var(--accent);
 }
 .badge-queued {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: hsl(var(--info-soft));
+  color: hsl(var(--info));
 }
 .badge-completed {
-  background: #ecfdf5;
-  color: #047857;
+  background: hsl(var(--success-soft));
+  color: hsl(var(--success));
 }
 .badge-failed {
-  background: #fef2f2;
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 .badge-cancelled {
-  background: #f3f4f6;
-  color: #6b7280;
+  background: hsl(var(--muted-bg));
+  color: var(--muted);
 }
 .task-meta {
   display: flex;
@@ -593,7 +593,7 @@ onBeforeUnmount(() => {
 }
 .progress-track {
   height: 4px;
-  background: #e5e7eb;
+  background: hsl(var(--muted-bg));
   border-radius: 2px;
   overflow: hidden;
 }

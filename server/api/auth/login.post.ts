@@ -1,4 +1,4 @@
-import { createSessionToken, safeEqualString } from '~~/server/utils/crypto'
+import { createSessionToken, SESSION_MAX_AGE_SEC, safeEqualString } from '~~/server/utils/crypto'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ token?: string }>(event)
@@ -12,7 +12,8 @@ export default defineEventHandler(async (event) => {
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60,
+    maxAge: SESSION_MAX_AGE_SEC,
+    // 本地 http 开发不强制 secure；生产 https 由浏览器按站点策略处理
   })
-  return { ok: true }
+  return { ok: true, expiresIn: SESSION_MAX_AGE_SEC }
 })

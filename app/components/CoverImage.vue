@@ -110,7 +110,7 @@ function onError(e: Event) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f3f4f6;
+  background: hsl(var(--muted-bg));
 }
 
 .cover-img {
@@ -150,9 +150,9 @@ function onError(e: Event) {
 .shimmer {
   background-image: linear-gradient(
     90deg,
-    rgba(229, 231, 235, 0.7) 0px,
-    rgba(243, 244, 246, 0.95) 40px,
-    rgba(229, 231, 235, 0.7) 80px
+    color-mix(in oklab, hsl(var(--muted-bg)) 70%, transparent) 0px,
+    color-mix(in oklab, hsl(var(--muted-bg)) 100%, transparent) 40px,
+    color-mix(in oklab, hsl(var(--muted-bg)) 70%, transparent) 80px
   );
   background-size: 200px 100%;
   animation: shimmer 1.5s infinite linear;

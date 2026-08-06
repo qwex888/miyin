@@ -9,6 +9,11 @@ export default defineNuxtConfig({
   app: {
     // 飞牛统一网关下为 /app/miyin/；本地默认 /
     baseURL: appBaseURL.endsWith('/') ? appBaseURL : `${appBaseURL}/`,
+    head: {
+      htmlAttrs: {
+        lang: 'zh-CN',
+      },
+    },
   },
   nitro: {
     preset: 'node-server',

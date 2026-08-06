@@ -103,18 +103,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(15, 23, 42, 0.45);
+  background: color-mix(in oklab, #0f172a 40%, transparent);
   backdrop-filter: blur(2px);
 }
 .dialog {
   width: min(420px, 100%);
   background: var(--surface);
+  color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: calc(var(--radius) + 4px);
   padding: 20px;
-  box-shadow:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1),
-    0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow);
 }
 .header {
   display: grid;

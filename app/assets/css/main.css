@@ -1,26 +1,116 @@
+/* shadcn/ui 风格 design tokens；.dark 由系统偏好切换 */
+
 :root {
-  --bg: #f7f8fa;
+  --radius: 0.5rem;
+
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 173 80% 26%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted-bg: 240 4.8% 95.9%;
+  --muted-fg: 240 3.8% 46.1%;
+  --soft: 166 76% 97%;
+  --soft-fg: 173 80% 26%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  /* 浅色边框提高对比度，避免白底上看不见 */
+  --border-hsl: 240 6% 75%;
+  --input: 240 6% 75%;
+  --ring: 173 80% 26%;
+  --overlay: 222 47% 11% / 0.4;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 12px rgb(0 0 0 / 0.06);
+
+  --success: 160 84% 30%;
+  --success-soft: 152 81% 96%;
+  --info: 221 83% 53%;
+  --info-soft: 214 95% 93%;
+
+  /* 业务侧常用别名（完整颜色；浅色用明确 hex，保证可见） */
+  --bg: #f4f4f5;
   --surface: #ffffff;
-  --border: #e5e7eb;
-  --text: #1a1a1a;
-  --muted: #6b7280;
+  --text: #18181b;
+  --muted: #71717a;
   --accent: #0f766e;
   --accent-soft: #f0fdfa;
-  --danger: #b91c1c;
-  --radius: 8px;
-  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --danger: #dc2626;
+  --border: #d4d4d8;
+  --input-border: #a1a1aa;
+}
+
+.dark {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 5.5%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 5.5%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 166 72% 42%;
+  --primary-foreground: 166 80% 8%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted-bg: 240 3.7% 15.9%;
+  --muted-fg: 240 5% 64.9%;
+  --soft: 173 40% 12%;
+  --soft-fg: 166 72% 55%;
+  --destructive: 0 62.8% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --border-hsl: 240 4% 22%;
+  --input: 240 4% 22%;
+  --ring: 166 72% 42%;
+  --overlay: 0 0% 0% / 0.65;
+  --shadow: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.35);
+
+  --success: 152 60% 45%;
+  --success-soft: 160 40% 12%;
+  --info: 217 70% 55%;
+  --info-soft: 217 40% 14%;
+
+  --bg: hsl(240 10% 3.9%);
+  --surface: hsl(240 10% 6.5%);
+  --text: hsl(0 0% 98%);
+  --muted: hsl(240 5% 64.9%);
+  --accent: hsl(166 72% 42%);
+  --accent-soft: hsl(173 40% 12%);
+  --danger: hsl(0 72% 55%);
+  --border: hsl(240 4% 22%);
+  --input-border: hsl(240 4% 30%);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
-  font-family: var(--font);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
@@ -41,41 +131,83 @@ select {
   justify-content: center;
   gap: 6px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) - 2px);
   padding: 8px 14px;
   background: var(--accent);
-  color: #fff;
+  color: hsl(var(--primary-foreground));
   cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease,
+    filter 0.15s ease;
 }
 
 .btn:hover {
-  filter: brightness(1.05);
+  filter: brightness(1.06);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
+  filter: none;
 }
 
 .btn-ghost {
-  background: var(--surface);
+  background: transparent;
   color: var(--text);
   border-color: var(--border);
 }
 
+.btn-ghost:hover {
+  background: hsl(var(--secondary));
+  filter: none;
+}
+
 .btn-danger {
   background: var(--danger);
+  color: hsl(var(--destructive-foreground));
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: calc(var(--radius) - 4px);
 }
 
 .input,
 .textarea,
 .select {
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: calc(var(--radius) - 2px);
   padding: 8px 12px;
   background: var(--surface);
   color: var(--text);
+  font-size: 14px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--muted);
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
 }
 
 .textarea {
@@ -86,8 +218,9 @@ select {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: calc(var(--radius) + 2px);
   padding: 16px;
+  box-shadow: var(--shadow);
 }
 
 .muted {
@@ -98,6 +231,13 @@ select {
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px 16px 80px;
+}
+
+.page h2 {
+  margin: 0 0 12px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .table {
@@ -114,6 +254,12 @@ select {
   vertical-align: top;
 }
 
+.table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
@@ -124,29 +270,42 @@ select {
 }
 
 .badge-dead {
-  background: #fef2f2;
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 
 .badge-unknown {
-  background: #f3f4f6;
+  background: hsl(var(--muted-bg));
   color: var(--muted);
 }
 
 .drawer-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: color-mix(in oklab, #0f172a 40%, transparent);
   display: flex;
   justify-content: flex-end;
   z-index: 50;
+  backdrop-filter: blur(2px);
+}
+
+.dark .drawer-backdrop {
+  background: color-mix(in oklab, #000 65%, transparent);
 }
 
 .drawer {
   width: min(420px, 100%);
   height: 100%;
   background: var(--surface);
+  color: var(--text);
+  border-left: 1px solid var(--border);
   padding: 20px;
   overflow: auto;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow);
+}
+
+.drawer h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 600;
 }

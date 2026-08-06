@@ -3,7 +3,9 @@ export function useAuth() {
 
   async function refresh() {
     try {
-      await $fetch('/api/auth/me')
+      // SSR 时转发浏览器 Cookie，避免刷新后误判未登录
+      const requestFetch = useRequestFetch()
+      await requestFetch('/api/auth/me')
       loggedIn.value = true
       return true
     } catch {
@@ -13,13 +15,15 @@ export function useAuth() {
   }
 
   async function login(token: string) {
-    await $fetch('/api/auth/login', { method: 'POST', body: { token } })
+    const requestFetch = useRequestFetch()
+    await requestFetch('/api/auth/login', { method: 'POST', body: { token } })
     loggedIn.value = true
   }
 
   async function logout() {
     try {
-      await $fetch('/api/auth/logout', { method: 'POST' })
+      const requestFetch = useRequestFetch()
+      await requestFetch('/api/auth/logout', { method: 'POST' })
     } finally {
       loggedIn.value = false
       await navigateTo('/login')
