@@ -1,5 +1,59 @@
 #!/bin/bash
 ### 卸载完成后调用。
-### 用户数据在 data-share（miyin/data、miyin/downloads），由系统按策略保留/清理，此处不做强制删除。
+### wizard_data_action=keep（默认）：保留配置与数据，便于重装恢复。
+### wizard_data_action=delete：删除配置、数据目录（含下载队列库/音源/设置）与运行态；
+###   不删除已下载音乐（data-share 的 downloads、以及自定义 DOWNLOAD_DIR）。
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib_config.sh"
+
+ACTION="${wizard_data_action:-keep}"
+
+if [ "$ACTION" != "delete" ]; then
+  exit 0
+fi
+
+miyin_load_config
+
+# TRIM_DATA_SHARE_PATHS 形如 path1:path2（声明顺序：data, downloads）
+IFS=':' read -r DATA_DIR SHARE_DOWNLOAD_DIR _ <<<"${TRIM_DATA_SHARE_PATHS}"
+DATA_DIR="${DATA_DIR:-${TRIM_PKGVAR}/data}"
+
+# 1) 应用配置（口令、SESSION_SECRET、下载模式等）
+if [ -n "${TRIM_PKGETC:-}" ] && [ -d "$TRIM_PKGETC" ]; then
+  rm -f "${TRIM_PKGETC}/miyin.env" 2>/dev/null || true
+  # 目录若已空则尝试移除，失败忽略（系统可能仍占用）
+  rmdir "$TRIM_PKGETC" 2>/dev/null || true
+fi
+
+# 2) 数据目录：SQLite（含下载任务队列）、设置、音源脚本等
+#    明确不要动 SHARE_DOWNLOAD_DIR / CUSTOM_DOWNLOAD_DIR
+if [ -n "$DATA_DIR" ] && [ -d "$DATA_DIR" ]; then
+  case "$DATA_DIR" in
+    */miyin/data|*/data)
+      rm -rf "$DATA_DIR" 2>/dev/null || true
+      ;;
+    *)
+      # 非预期路径时只删已知内容，避免误伤
+      rm -f "$DATA_DIR"/miyin.sqlite "$DATA_DIR"/miyin.db 2>/dev/null || true
+      rm -rf "$DATA_DIR"/sources 2>/dev/null || true
+      ;;
+  esac
+fi
+
+# 3) 运行态：日志、pid 等（TRIM_PKGVAR 下不包含 downloads）
+if [ -n "${TRIM_PKGVAR:-}" ] && [ -d "$TRIM_PKGVAR" ]; then
+  rm -f "${TRIM_PKGVAR}/app.log" "${TRIM_PKGVAR}/app.pid" 2>/dev/null || true
+  # 若 data 曾落在 PKGVAR 下且上面未删干净
+  if [ -d "${TRIM_PKGVAR}/data" ]; then
+    rm -rf "${TRIM_PKGVAR}/data" 2>/dev/null || true
+  fi
+  # 不删除 ${TRIM_PKGVAR}/downloads（若存在）
+fi
+
+# 故意不处理：
+# - SHARE_DOWNLOAD_DIR（miyin/downloads）
+# - CUSTOM_DOWNLOAD_DIR（用户自定义音乐目录）
 
 exit 0

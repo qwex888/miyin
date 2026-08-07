@@ -25,6 +25,14 @@
 
 装后可在应用设置中再次打开配置向导（`wizard/config`）。
 
+## 卸载向导
+
+| 字段 | 说明 |
+|------|------|
+| `wizard_data_action` | `keep`（默认）：保留配置与数据；`delete`：删除配置、SQLite（含下载队列）、音源与运行日志 |
+
+选择删除时**不会**清理已下载音乐（`miyin/downloads` 与自定义下载目录）。
+
 ## 双架构（D2 胖包）
 
 `platform=all`。`better-sqlite3@13+` 的 npm 包自带 `prebuilds/linux-x64.node` 与 `linux-arm64.node`，运行时按 CPU 自动加载，一份 `.fpk` 通吃 x86 / ARM。
@@ -37,7 +45,7 @@ packaging/fnos/
   scripts/build-fpk.sh
   miyin/
     manifest
-    wizard/install | config
+    wizard/install | config | uninstall
     cmd/main + 生命周期脚本 + lib_config.sh
     config/privilege | resource
     app/ui/...

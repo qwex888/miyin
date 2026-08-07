@@ -95,6 +95,7 @@ required=(
   app/server/start.mjs
   wizard/install
   wizard/config
+  wizard/uninstall
 )
 missing=0
 for rel in "${required[@]}"; do

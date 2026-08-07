@@ -1,0 +1,37 @@
+[
+  {
+    "stepTitle": "卸载确认",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "即将卸载觅音。请选择是否同时删除应用配置与数据。已下载的音乐文件不会被删除（默认 downloads 目录与自定义下载目录均保留）。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_data_action",
+        "label": "配置与数据处理",
+        "initValue": "keep",
+        "options": [
+          {
+            "label": "保留数据（推荐）— 重新安装后可恢复配置、音源与下载队列",
+            "value": "keep"
+          },
+          {
+            "label": "删除配置与数据 — 清除口令/数据库/音源/下载队列等（不可恢复）；已下载音乐保留",
+            "value": "delete"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请选择如何处理配置与数据"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "选择「删除」后：应用配置（miyin.env）、数据目录（SQLite 含下载任务队列、设置、音源脚本等）及运行日志会被清除。不会删除 miyin/downloads 或自定义下载目录中的音乐文件。"
+      }
+    ]
+  }
+]

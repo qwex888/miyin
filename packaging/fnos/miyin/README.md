@@ -7,7 +7,7 @@
 # 或：cd packaging/fnos/miyin && fnpack build
 ```
 
-安装后通过统一网关 `/app/miyin` 访问（无独立对外端口）。安装向导配置访问口令与下载目录；`SESSION_SECRET` 自动生成。
+安装后通过统一网关 `/app/miyin` 访问（无独立对外端口）。安装向导配置访问口令与下载目录；`SESSION_SECRET` 自动生成。卸载时可选择保留或删除配置与数据（含下载队列库）；已下载音乐始终保留。
 
 ## 运行依赖
 
