@@ -1,5 +1,4 @@
-import { listEnabledOkSources, getSource } from '~~/server/services/sourceRegistry'
-import { loadLxSource, pickQuality } from '~~/server/services/sourceRuntime'
+import { resolveMusicUrl, isHighestQuality } from '~~/server/services/musicUrlResolve'
 import { getSettings } from '~~/server/services/settingsService'
 
 export default defineEventHandler(async (event) => {
@@ -13,33 +12,27 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'platform/musicInfo 必填' })
   }
   const settings = getSettings()
-  const sources = listEnabledOkSources(body.platform)
-  if (!sources.length) {
-    throw createError({ statusCode: 400, statusMessage: '没有可用音源，请先导入并检测音源' })
-  }
-
-  const ordered = body.sourceId
-    ? [getSource(body.sourceId), ...sources.filter((s) => s.id !== body.sourceId)].filter(Boolean)
-    : sources
-
-  const errors: string[] = []
   const qualityPref = body.quality || settings.defaultQuality
 
-  for (const source of ordered as NonNullable<ReturnType<typeof getSource>>[]) {
-    if (!source?.local_path) continue
-    try {
-      const handle = await loadLxSource(source.local_path)
-      const available = handle.qualityMap[body.platform] || ['128k', '320k']
-      const quality = pickQuality(available, qualityPref)
-      const url = await handle.getMusicUrl(body.platform, body.musicInfo, quality)
-      return { url, quality, sourceId: source.id, sourceName: source.name }
-    } catch (err: any) {
-      errors.push(`${source.name}: ${err?.message || err}`)
+  try {
+    const result = await resolveMusicUrl({
+      platform: body.platform,
+      musicInfo: body.musicInfo,
+      quality: qualityPref,
+      sourceId: body.sourceId,
+    })
+    return {
+      url: result.url,
+      quality: result.quality,
+      sourceId: result.sourceId,
+      sourceName: result.sourceName,
+      // 固定音质失败不会走到这里；highest 时可能已降级
+      degraded: isHighestQuality(qualityPref) && result.quality !== 'flac24bit' && result.quality !== 'flac',
     }
+  } catch (err: any) {
+    throw createError({
+      statusCode: 502,
+      statusMessage: err?.message || '试听取链失败',
+    })
   }
-
-  throw createError({
-    statusCode: 502,
-    statusMessage: `试听取链失败（已尝试 ${errors.length} 个音源）: ${errors.join(' | ')}`,
-  })
 })

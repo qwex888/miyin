@@ -5,7 +5,7 @@ import { getDownloadDir } from '../utils/paths'
 
 export const AppSettingsSchema = z.object({
   downloadDir: z.string().min(1),
-  defaultQuality: z.enum(['highest', 'flac', '320k', '128k']).default('highest'),
+  defaultQuality: z.enum(['highest', 'flac24bit', 'flac', '320k', '128k']).default('highest'),
   concurrency: z.number().int().min(1).max(5).default(1),
   downloadLyric: z.boolean().default(true),
   /** external=仅 .lrc；embedded=仅内嵌到音频 */
@@ -22,7 +22,7 @@ export const NAME_TEMPLATE_VARS = [
   { key: '{title}', desc: '歌曲标题' },
   { key: '{album}', desc: '专辑名（可空）' },
   { key: '{platform}', desc: '平台代号，如 wy / kw / kg / tx' },
-  { key: '{quality}', desc: '实际音质，如 320k / flac' },
+  { key: '{quality}', desc: '实际音质，如 320k / flac / flac24bit' },
   { key: '{id}', desc: '歌曲 externalId / songmid' },
   { key: '{track}', desc: '音轨号（有则写入，无则为空）' },
 ] as const

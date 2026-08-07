@@ -16,8 +16,8 @@ import { randomUUID } from 'node:crypto'
 import { getDb } from '../utils/db'
 import { getDownloadDir } from '../utils/paths'
 import { getSettings } from './settingsService'
-import { getSource, listEnabledOkSources } from './sourceRegistry'
-import { loadLxSource, pickQuality } from './sourceRuntime'
+import { listEnabledOkSources } from './sourceRegistry'
+import { isHighestQuality, resolveMusicUrl } from './musicUrlResolve'
 import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
 import { sniffAudioExt } from '../utils/audioSniff'
@@ -405,15 +405,20 @@ export function ensureDiskWritable(dir: string) {
   return resolved
 }
 
-async function resolveUrl(task: DownloadTaskRow, quality: string) {
-  const source = getSource(task.source_id!)
-  if (!source?.local_path) throw new Error('音源文件缺失')
-  const handle = await loadLxSource(source.local_path)
-  const available = handle.qualityMap[task.platform] || ['128k', '320k']
-  const q = pickQuality(available, quality)
+async function resolveUrl(task: DownloadTaskRow, qualityPref: string) {
   const musicInfo = JSON.parse(task.music_info_json || '{}')
-  const url = await handle.getMusicUrl(task.platform, musicInfo, q)
-  return { url, quality: q }
+  const result = await resolveMusicUrl({
+    platform: task.platform,
+    musicInfo,
+    quality: qualityPref,
+    sourceId: task.source_id,
+  })
+  // highest 轮询成功后可能换了音源，写回任务
+  if (result.sourceId && result.sourceId !== task.source_id) {
+    updateTask(task.id, { source_id: result.sourceId })
+    task.source_id = result.sourceId
+  }
+  return { url: result.url, quality: result.quality }
 }
 
 async function downloadFile(
@@ -603,11 +608,21 @@ async function processTask(task: DownloadTaskRow) {
     }
     const attempts = (task.attempts || 0) + 1
     const settings2 = getSettings()
+    const qualityPref = task.quality || settings2.defaultQuality
+    const fixedQuality = !isHighestQuality(qualityPref)
     // 试听片段：只标失败，不自动换源/重试；由用户在队列手动换源
     const isPreview = String(err?.code) === 'PREVIEW_CLIP'
-    const retryable =
-      !isPreview && (isRetryableError(err) || String(err?.code) === 'HTTP_RETRY')
-    const alts = listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
+    // 固定音质：取链失败不换源；仅网络/磁盘类可同源重试
+    const retryable = isPreview
+      ? false
+      : fixedQuality
+        ? isRetryableError(err) || String(err?.code) === 'HTTP_RETRY'
+        : isRetryableError(err) ||
+          String(err?.code) === 'HTTP_RETRY' ||
+          String(err?.code) === 'GET_URL_FAILED'
+    const alts = fixedQuality
+      ? []
+      : listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
     const nextStatus = nextStatusAfterFailure({
       attempts,
       maxAttempts: settings2.maxAttempts,
@@ -647,7 +662,7 @@ async function processTask(task: DownloadTaskRow) {
 function guessExt(url: string, quality: string) {
   const u = url.toLowerCase()
   // 优先看明确后缀；quality=flac 仅作弱提示（下载后会再嗅探纠正）
-  if (/\.flac(?:\?|#|$)/i.test(u) || quality === 'flac') return 'flac'
+  if (/\.flac(?:\?|#|$)/i.test(u) || quality === 'flac' || quality === 'flac24bit') return 'flac'
   if (/\.m4a(?:\?|#|$)/i.test(u)) return 'm4a'
   if (/\.ape(?:\?|#|$)/i.test(u)) return 'ape'
   if (/\.ogg(?:\?|#|$)/i.test(u)) return 'ogg'

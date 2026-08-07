@@ -10,6 +10,7 @@ const PLATFORM_LABELS: Record<string, string> = {
 
 const QUALITY_LABELS: Record<string, string> = {
   highest: '最高可用',
+  flac24bit: 'Hi-Res',
   flac: '无损',
   '320k': '320k',
   '128k': '128k',

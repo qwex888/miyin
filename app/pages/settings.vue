@@ -95,8 +95,9 @@ onMounted(load)
       <label>
         <span>默认音质</span>
         <select v-model="form.defaultQuality" class="select">
-          <option value="highest">最高可用</option>
-          <option value="flac">flac</option>
+          <option value="highest">最高可用（多源轮询+降级）</option>
+          <option value="flac24bit">flac24bit（Hi-Res）</option>
+          <option value="flac">flac（无损）</option>
           <option value="320k">320k</option>
           <option value="128k">128k</option>
         </select>

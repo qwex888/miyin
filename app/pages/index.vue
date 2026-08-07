@@ -30,9 +30,13 @@ const lyricMode = ref<'external' | 'embedded'>('external')
 const msg = ref('')
 const { play, current, toggle } = usePlayer()
 const detailSheetOpen = ref(false)
+const downloading = ref(false)
+const sheetMsg = ref('')
+const sheetMsgIsError = ref(false)
 
 function selectTrack(t: Track) {
   selected.value = t
+  sheetMsg.value = ''
   if (import.meta.client && window.matchMedia('(max-width: 768px)').matches) {
     detailSheetOpen.value = true
   }
@@ -101,6 +105,7 @@ watch(platform, () => {
 async function preview() {
   if (!selected.value) return
   msg.value = ''
+  sheetMsg.value = ''
   try {
     const res = await $fetch<{ url: string; quality: string }>('/api/preview', {
       method: 'POST',
@@ -116,13 +121,20 @@ async function preview() {
       url: res.url,
     })
   } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '试听失败'
+    const m = e?.data?.statusMessage || e?.message || '试听失败'
+    msg.value = m
+    if (detailSheetOpen.value) {
+      sheetMsg.value = m
+      sheetMsgIsError.value = true
+    }
   }
 }
 
 async function download() {
-  if (!selected.value) return
+  if (!selected.value || downloading.value) return
   msg.value = ''
+  sheetMsg.value = ''
+  downloading.value = true
   try {
     await $fetch('/api/downloads', {
       method: 'POST',
@@ -141,8 +153,22 @@ async function download() {
     })
     msg.value = '已加入下载队列'
     useDownloadBadge().notifyChanged()
+    if (detailSheetOpen.value) {
+      sheetMsg.value = '已加入下载队列'
+      sheetMsgIsError.value = false
+      // 稍作反馈后再收起，避免用户感觉没反应
+      await new Promise((r) => setTimeout(r, 450))
+      closeDetailSheet()
+    }
   } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '入队失败'
+    const m = e?.data?.statusMessage || e?.message || '入队失败'
+    msg.value = m
+    if (detailSheetOpen.value) {
+      sheetMsg.value = m
+      sheetMsgIsError.value = true
+    }
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -215,6 +241,7 @@ function fmtDur(sec: number) {
             <span>音质</span>
             <select v-model="quality" class="select">
               <option value="highest">最高可用</option>
+              <option value="flac24bit">flac24bit</option>
               <option value="flac">flac</option>
               <option value="320k">320k</option>
               <option value="128k">128k</option>
@@ -263,6 +290,7 @@ function fmtDur(sec: number) {
               <span>音质</span>
               <select v-model="quality" class="select">
                 <option value="highest">最高可用</option>
+                <option value="flac24bit">flac24bit</option>
                 <option value="flac">flac</option>
                 <option value="320k">320k</option>
                 <option value="128k">128k</option>
@@ -281,8 +309,11 @@ function fmtDur(sec: number) {
             </label>
             <div class="actions">
               <button class="btn btn-ghost" type="button" @click="preview">试听</button>
-              <button class="btn" type="button" @click="download">下载</button>
+              <button class="btn" type="button" :disabled="downloading" @click="download">
+                {{ downloading ? '入队中…' : '下载' }}
+              </button>
             </div>
+            <p v-if="sheetMsg" class="sheet-feedback" :class="{ err: sheetMsgIsError }">{{ sheetMsg }}</p>
           </div>
         </div>
       </div>
@@ -555,5 +586,13 @@ function fmtDur(sec: number) {
   margin: 0 0 2px;
   color: var(--muted);
   font-size: 13px;
+}
+.sheet-feedback {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--accent);
+}
+.sheet-feedback.err {
+  color: var(--danger);
 }
 </style>

@@ -665,7 +665,7 @@ export function resetSourceRuntimeState() {
 export function pickQuality(available: string[], preferred: string) {
   if (!available.length) return preferred === 'highest' ? '320k' : preferred
   if (preferred === 'highest') {
-    const order = ['flac', '320k', '192k', '128k']
+    const order = ['flac24bit', 'flac', '320k', '192k', '128k']
     for (const q of order) {
       if (available.includes(q)) return q
     }

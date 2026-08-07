@@ -44,6 +44,7 @@ const switchDialogOpen = ref(false)
 const switchDialogTitle = ref('选择音源')
 const switchDialogDesc = ref('选择后将使用该音源重新下载，并记住为默认选项。')
 const switchOptions = ref<SwitchSourceOption[]>([])
+const sourceNameById = ref<Record<string, string>>({})
 let switchPending: null | { mode: 'one'; task: Task } | { mode: 'batch'; tasks: Task[] } = null
 
 const {
@@ -57,6 +58,17 @@ function parsePlatforms(raw: string): string[] {
     return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : []
   } catch {
     return []
+  }
+}
+
+async function loadSourceNames() {
+  try {
+    const res = await $fetch<{ items: SourceRowLite[] }>('/api/sources')
+    const map: Record<string, string> = {}
+    for (const s of res.items || []) map[s.id] = s.name
+    sourceNameById.value = map
+  } catch {
+    /* ignore */
   }
 }
 
@@ -207,9 +219,22 @@ function platformText(platform: string) {
   return `平台：${platformLabel(platform)}`
 }
 
+function sourceText(t: Task) {
+  if (!t.source_id) return ''
+  const name = sourceNameById.value[t.source_id]
+  return name ? `音源：${name}` : `音源：${t.source_id.slice(0, 8)}`
+}
+
 function qualityText(quality: string | null | undefined) {
   if (!quality) return ''
   return `音质：${qualityLabel(quality)}`
+}
+
+/** attempts=失败次数；≥1 时语义化为「已重试下载 N 次」 */
+function attemptsText(attempts: number | null | undefined) {
+  const n = Number(attempts || 0)
+  if (n <= 0) return ''
+  return `已重试下载 ${n} 次`
 }
 
 function progressPct(t: Task) {
@@ -423,6 +448,7 @@ onMounted(() => {
   // 仅订阅；建连由顶栏 startWatching 负责（若尚未启动则补一次）
   startWatching()
   bindDownloadEvents()
+  void loadSourceNames()
   if (cache.value.length) {
     allItems.value = cache.value as Task[]
     applyFilter()
@@ -530,9 +556,10 @@ onActivated(() => {
 
               <div class="task-meta">
                 <span>{{ platformText(t.platform) }}</span>
+                <span v-if="sourceText(t)">{{ sourceText(t) }}</span>
                 <span v-if="t.quality">{{ qualityText(t.quality) }}</span>
                 <span v-if="t.file_size">{{ formatSize(t.file_size) }}</span>
-                <span v-if="t.attempts">尝试 {{ t.attempts }}</span>
+                <span v-if="attemptsText(t.attempts)">{{ attemptsText(t.attempts) }}</span>
               </div>
 
               <div v-if="t.status === 'running' || t.status === 'queued'" class="progress">
