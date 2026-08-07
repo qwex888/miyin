@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-07
+
 ### Fixed
 
 - CI：适配 pnpm 11，将 `onlyBuiltDependencies` 迁移为 `pnpm-workspace.yaml` 的 `allowBuilds`，修复 `ERR_PNPM_IGNORED_BUILDS`
@@ -42,6 +44,7 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/qwex888/miyin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qwex888/miyin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qwex888/miyin/releases/tag/v0.1.0
