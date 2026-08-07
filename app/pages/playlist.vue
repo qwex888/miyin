@@ -182,9 +182,9 @@ function buildResolvedTracks(rows: MatchRow[]): Track[] {
       })
       continue
     }
-    const choice = confirmChoices.value[row.index]
-    if (choice === 'skip' || choice == null) continue
-    const cand = row.candidates[choice]
+    const raw = confirmChoices.value[row.index]
+    if (raw === 'skip' || raw == null) continue
+    const cand = row.candidates[raw]
     if (!cand) continue
     out.push({
       ...row.track,
@@ -320,32 +320,13 @@ async function confirmAndEnqueue() {
       </VirtualList>
     </div>
 
-    <div v-if="showConfirm" class="card confirm-card">
-      <h3>匹配确认（{{ confirmPending.length }}）</h3>
-      <p class="muted">以下曲目匹配分较低或未命中，请选择候选项或跳过。</p>
-      <div v-for="row in confirmPending" :key="row.index" class="confirm-item">
-        <div class="confirm-title">
-          <strong>{{ row.track.title }}</strong>
-          <span class="muted"> · {{ row.track.artist }}</span>
-          <span class="muted"> · 分 {{ row.score.toFixed(2) }}</span>
-          <span v-if="row.error" class="err"> · {{ row.error }}</span>
-        </div>
-        <label class="choice">
-          <input v-model="confirmChoices[row.index]" type="radio" value="skip" />
-          跳过
-        </label>
-        <label v-for="(c, ci) in row.candidates" :key="ci" class="choice">
-          <input v-model="confirmChoices[row.index]" type="radio" :value="ci" />
-          {{ c.title }} · {{ c.artist }}
-          <span class="muted">({{ c.score.toFixed(2) }})</span>
-        </label>
-        <p v-if="!row.candidates.length" class="muted">无候选，只能跳过</p>
-      </div>
-      <div class="actions" style="margin-top: 12px">
-        <button class="btn" type="button" :disabled="loading" @click="confirmAndEnqueue">确认并入队</button>
-        <button class="btn btn-ghost" type="button" @click="showConfirm = false">取消</button>
-      </div>
-    </div>
+    <MatchConfirmDialog
+      v-model:open="showConfirm"
+      v-model:choices="confirmChoices"
+      :rows="confirmPending"
+      :loading="loading"
+      @confirm="confirmAndEnqueue"
+    />
 
     <div v-if="result" class="card" style="margin-top: 16px">
       <h3>入队结果</h3>
@@ -464,23 +445,6 @@ async function confirmAndEnqueue() {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.confirm-card {
-  margin-top: 16px;
-}
-.confirm-item {
-  border-top: 1px solid var(--border);
-  padding: 10px 0;
-}
-.confirm-title {
-  margin-bottom: 6px;
-}
-.choice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-  font-size: 13px;
-}
 
 @media (max-width: 768px) {
   .row {
@@ -540,9 +504,6 @@ async function confirmAndEnqueue() {
     /* 比桌面 muted 更亮，避免暗色主题下几乎看不见 */
     color: color-mix(in oklab, var(--text) 55%, var(--muted));
     opacity: 1;
-  }
-  .choice {
-    min-height: 40px;
   }
 }
 </style>
