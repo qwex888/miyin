@@ -5,16 +5,30 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: '检出的 git ref（发版时传入 tag）'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.ref || '' }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  test-and-build:
+    name: test-and-build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
 
       - name: Enable pnpm via corepack
         run: corepack enable

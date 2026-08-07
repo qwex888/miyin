@@ -10,7 +10,8 @@
     "preview": "nuxt preview --port 18980",
     "postinstall": "nuxt prepare",
     "test": "vitest run",
-    "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh"
+    "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@tanstack/vue-virtual": "^3.13.35",

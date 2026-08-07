@@ -42,8 +42,17 @@ jobs:
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
 
-  docker:
+  # 发版前门禁：与 PR CI 同一套测试 + 构建
+  check:
     needs: resolve
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve.outputs.tag }}
+    permissions:
+      contents: read
+
+  docker:
+    needs: [resolve, check]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -94,7 +103,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   fpk:
-    needs: resolve
+    needs: [resolve, check]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -138,7 +147,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [resolve, docker, fpk]
+    needs: [resolve, check, docker, fpk]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

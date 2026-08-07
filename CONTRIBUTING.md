@@ -28,12 +28,13 @@ pnpm build
 pnpm build:fpk
 ```
 
-## Pull Request
+## 发版
 
-1. 从最新 `main` 开分支
-2. 改动尽量聚焦；附带必要测试
-3. PR 描述说明动机与验证方式
-4. 用户可见行为变更请同步更新 `CHANGELOG.md`（`[Unreleased]` 段）
+```bash
+pnpm release          # 或 pnpm release -- patch
+```
+
+推送 tag 后由 Actions 构建 Docker / FPK，并在 GitHub Releases 上传 `miyin-v*.fpk`。详见 README「发布（维护者）」。
 
 ## 约定
 

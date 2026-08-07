@@ -55,15 +55,23 @@ pnpm build:fpk
 ## 发布（维护者）
 
 1. 在 GitHub → Settings → Secrets 配置：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
-2. 更新 `CHANGELOG.md`（将 `[Unreleased]` 收成新版本段）
-3. 打 tag 并推送：
+2. 在 `CHANGELOG.md` 的 `[Unreleased]` 写好本版变更（脚本会自动收成正式版本段）
+3. 工作区干净、位于 `main`，然后一键发版：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+pnpm release          # 交互选择 patch / minor / major
+# 或
+pnpm release -- patch
 ```
 
-Actions 将自动：跑测试构建、推送多架构镜像、打 FPK 胖包、创建 GitHub Release。
+脚本会：升版本号（`package.json` + 飞牛 `manifest`）→ 整理 CHANGELOG → 本地 `test`/`build` → 提交 → 打 `v*` tag → push。  
+随后 GitHub Actions「Build & Release」自动：检测 → 推送 Docker 多架构镜像 → 打 FPK 胖包 → **创建 GitHub Release 并上传 `miyin-v*.fpk`**。
+
+```bash
+# 查看进度
+open https://github.com/qwex888/miyin/actions
+open https://github.com/qwex888/miyin/releases
+```
 
 ## 常用命令
 
@@ -72,6 +80,7 @@ pnpm test      # 单元测试
 pnpm build     # 生产构建
 pnpm preview   # 预览构建产物
 pnpm build:fpk # 飞牛 Native FPK（需 fnpack）
+pnpm release   # 一键打 tag，触发 Docker / FPK / GitHub Release
 docker compose up -d
 ```
 
