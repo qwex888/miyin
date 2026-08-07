@@ -17,7 +17,7 @@ permissions:
 
 env:
   FNPACK_VERSION: '1.2.1'
-  DOCKERHUB_IMAGE: qwex888/miyin
+  DOCKERHUB_IMAGE: qwex333/miyin
   GHCR_IMAGE: ghcr.io/qwex888/miyin
 
 jobs:

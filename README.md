@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/qwex888/miyin/actions/workflows/ci.yml/badge.svg)](https://github.com/qwex888/miyin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker Pulls](https://img.shields.io/docker/pulls/qwex888/miyin)](https://hub.docker.com/r/qwex888/miyin)
+[![Docker Pulls](https://img.shields.io/docker/pulls/qwex333/miyin)](https://hub.docker.com/r/qwex333/miyin)
 
 ## 快速开始
 
@@ -21,7 +21,7 @@ pnpm dev
 多架构镜像（`linux/amd64` + `linux/arm64`）发布至 Docker Hub / GHCR：
 
 ```bash
-docker pull qwex888/miyin:latest
+docker pull qwex333/miyin:latest
 # 或
 docker pull ghcr.io/qwex888/miyin:latest
 
@@ -31,7 +31,7 @@ docker run -d --name miyin \
   -e SESSION_SECRET="$(openssl rand -hex 32)" \
   -v "$PWD/data:/data" \
   -v "$PWD/downloads:/downloads" \
-  qwex888/miyin:latest
+  qwex333/miyin:latest
 ```
 
 或使用仓库内 compose：
