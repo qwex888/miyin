@@ -52,7 +52,21 @@ packaging/fnos/
     app/server/   # build-fpk.sh 生成
 ```
 
-## 构建
+## 发布产物（CI）
+
+推送 tag `v*` 后，GitHub Actions 会：
+
+1. 构建并推送 Docker 多架构镜像到 Docker Hub / GHCR
+2. 安装官方 `fnpack`，执行本脚本打出 **x86+ARM 胖包** `.fpk`
+3. 上传到 GitHub Release（如 `miyin-v0.2.0.fpk`）
+
+本地无 `fnpack` 时脚本会准备好 `app/server` 后退出 0；CI 设置 `REQUIRE_FNPACK=1` 强制成功。
+
+```bash
+MIYIN_VERSION=0.2.0 REQUIRE_FNPACK=1 ./packaging/fnos/scripts/build-fpk.sh
+```
+
+本地开发打包：
 
 ```bash
 chmod +x packaging/fnos/scripts/build-fpk.sh packaging/fnos/miyin/cmd/*

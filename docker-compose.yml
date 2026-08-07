@@ -1,11 +1,13 @@
 services:
   miyin:
+    image: qwex888/miyin:latest
     build: .
     ports:
       - "18980:18980"
     environment:
-      AUTH_TOKEN: changeme
-      SESSION_SECRET: please-change-me
+      # 公网请设置口令；留空 = 开放模式
+      AUTH_TOKEN: ${AUTH_TOKEN:-changeme}
+      SESSION_SECRET: ${SESSION_SECRET:-please-change-me}
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
       HOST: 0.0.0.0

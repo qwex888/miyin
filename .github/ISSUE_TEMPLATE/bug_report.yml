@@ -1,0 +1,83 @@
+name: Bug Report
+description: 报告一个 Bug
+title: "[Bug] "
+labels: ["bug", "status: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题！请尽可能详细填写。安全漏洞请走 [SECURITY.md](../SECURITY.md)，勿公开贴利用细节。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 简要描述遇到的问题
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序列出复现问题的步骤
+      placeholder: |
+        1. 打开 ...
+        2. 点击 ...
+        3. 观察到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - 本机 pnpm / Node
+        - Docker
+        - 飞牛 FPK
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 相关音乐平台（如适用）
+      options:
+        - 不涉及
+        - 网易云 (wy)
+        - 酷我 (kw)
+        - 酷狗 (kg)
+        - QQ (tx)
+        - 多个 / 不确定
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 版本、系统、浏览器、音源名称、音质选项等
+      placeholder: |
+        - 觅音版本: v0.2.0
+        - 系统: Linux / macOS / 飞牛 fnOS x.x
+        - 浏览器: Chrome 125（若 Web UI）
+        - 音源: 六阴 / …
+        - 音质: highest / flac / …
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志 / 截图
+      description: 队列错误文案、服务端日志、截图等（请打码口令与路径中的隐私）
+    validations:
+      required: false

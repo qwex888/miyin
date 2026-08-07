@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 讨论区
+    url: https://github.com/qwex888/miyin/discussions
+    about: 提问、分享使用心得或音源配置经验（若 Discussions 未开启可先用 Issue）
+  - name: 知音音乐（曲库 / 播放）
+    url: https://github.com/qwex888/zhiyin-music-web
+    about: 觅音负责下载；个人曲库与流媒体可了解同系列「知音」
