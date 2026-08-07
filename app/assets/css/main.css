@@ -30,6 +30,22 @@
   --success-soft: 152 81% 96%;
   --info: 221 83% 53%;
   --info-soft: 214 95% 93%;
+  --warning: 32 95% 40%;
+  --warning-soft: 48 96% 89%;
+
+  /* Toast 面板（亮色） */
+  --toast-success-bg: #ecfdf5;
+  --toast-success-fg: #065f46;
+  --toast-success-border: #a7f3d0;
+  --toast-error-bg: #fef2f2;
+  --toast-error-fg: #991b1b;
+  --toast-error-border: #fecaca;
+  --toast-warning-bg: #fffbeb;
+  --toast-warning-fg: #92400e;
+  --toast-warning-border: #fde68a;
+  --toast-info-bg: #eff6ff;
+  --toast-info-fg: #1e40af;
+  --toast-info-border: #bfdbfe;
 
   /* 业务侧常用别名（完整颜色；浅色用明确 hex，保证可见） */
   --bg: #f4f4f5;
@@ -70,6 +86,22 @@
   --success-soft: 160 40% 12%;
   --info: 217 70% 55%;
   --info-soft: 217 40% 14%;
+  --warning: 38 90% 55%;
+  --warning-soft: 32 40% 14%;
+
+  /* Toast 面板（暗色） */
+  --toast-success-bg: hsl(160 40% 12%);
+  --toast-success-fg: hsl(152 70% 72%);
+  --toast-success-border: hsl(160 35% 22%);
+  --toast-error-bg: hsl(0 40% 12%);
+  --toast-error-fg: hsl(0 80% 75%);
+  --toast-error-border: hsl(0 35% 24%);
+  --toast-warning-bg: hsl(32 40% 12%);
+  --toast-warning-fg: hsl(42 90% 70%);
+  --toast-warning-border: hsl(32 35% 22%);
+  --toast-info-bg: hsl(217 40% 14%);
+  --toast-info-fg: hsl(213 90% 75%);
+  --toast-info-border: hsl(217 35% 24%);
 
   --bg: hsl(240 10% 3.9%);
   --surface: hsl(240 10% 6.5%);
@@ -228,9 +260,12 @@ select {
 }
 
 .page {
+  position: relative;
   max-width: 1200px;
   margin: 0 auto;
   padding: 20px 16px 80px;
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
 @media (max-width: 768px) {

@@ -5,12 +5,18 @@ const route = useRoute()
 const { logout, authRequired } = useAuth()
 const { activeCount, startWatching } = useDownloadEvents()
 const { mode, cycle } = useTheme()
+const toast = useToast()
 
 const themeTitle = computed(() => {
   if (mode.value === 'light') return '浅色（点击切换）'
   if (mode.value === 'dark') return '深色（点击切换）'
   return '跟随系统（点击切换）'
 })
+
+async function onLogout() {
+  await logout()
+  toast.info('已退出登录')
+}
 
 onMounted(() => startWatching())
 </script>
@@ -57,7 +63,7 @@ onMounted(() => startWatching())
           <path d="M8 20h8M12 16v4" />
         </svg>
       </button>
-      <button v-if="authRequired" class="btn btn-ghost btn-sm logout-btn" type="button" @click="logout">
+      <button v-if="authRequired" class="btn btn-ghost btn-sm logout-btn" type="button" @click="onLogout">
         退出
       </button>
     </div>

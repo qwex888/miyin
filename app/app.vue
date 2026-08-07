@@ -41,6 +41,7 @@ useHead({
       <NuxtPage :keepalive="{ max: 10 }" />
     </main>
     <AppBottomNav v-if="route.path !== '/login'" />
+    <AppToast />
   </div>
 </template>
 
@@ -57,5 +58,10 @@ useHead({
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+/* 让子页面可撑满主内容区，页内 loading 遮罩有足够高度 */
+.app-main > * {
+  min-height: 100%;
+  box-sizing: border-box;
 }
 </style>

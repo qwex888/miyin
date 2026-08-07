@@ -17,6 +17,7 @@ export function isRetryableError(err: unknown): boolean {
     'UND_ERR_SOCKET',
   ])
   if (retryCodes.has(code)) return true
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return false
   const patterns = [
     'enospc',
     'no space',

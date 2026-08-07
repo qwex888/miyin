@@ -23,20 +23,16 @@ const platforms = ref<Array<{ id: string; label: string; sourceCount: number }>>
 const items = ref<Track[]>([])
 const selected = ref<Track | null>(null)
 const loading = ref(false)
-const error = ref('')
 const quality = ref('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
-const msg = ref('')
 const { play, current, toggle } = usePlayer()
+const toast = useToast()
 const detailSheetOpen = ref(false)
 const downloading = ref(false)
-const sheetMsg = ref('')
-const sheetMsgIsError = ref(false)
 
 function selectTrack(t: Track) {
   selected.value = t
-  sheetMsg.value = ''
   if (import.meta.client && window.matchMedia('(max-width: 768px)').matches) {
     detailSheetOpen.value = true
   }
@@ -72,8 +68,6 @@ onUnmounted(() => {
 async function doSearch() {
   if (!keyword.value.trim()) return
   loading.value = true
-  error.value = ''
-  msg.value = ''
   try {
     const res = await $fetch<{
       items: Track[]
@@ -87,10 +81,12 @@ async function doSearch() {
     if (res.platforms?.length) platforms.value = res.platforms
     selected.value = res.items[0] || null
     if (!res.sourceHint?.length) {
-      msg.value = '提示：当前平台没有可用音源，试听/下载前请先到「音源管理」导入'
+      toast.warning('当前平台没有可用音源，试听/下载前请先到「音源管理」导入')
+    } else if (!res.items.length) {
+      toast.info('未找到相关歌曲')
     }
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '搜索失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '搜索失败'))
     items.value = []
     selected.value = null
   } finally {
@@ -104,8 +100,6 @@ watch(platform, () => {
 
 async function preview() {
   if (!selected.value) return
-  msg.value = ''
-  sheetMsg.value = ''
   try {
     const res = await $fetch<{ url: string; quality: string }>('/api/preview', {
       method: 'POST',
@@ -120,20 +114,13 @@ async function preview() {
       artist: selected.value.artist,
       url: res.url,
     })
-  } catch (e: any) {
-    const m = e?.data?.statusMessage || e?.message || '试听失败'
-    msg.value = m
-    if (detailSheetOpen.value) {
-      sheetMsg.value = m
-      sheetMsgIsError.value = true
-    }
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '试听失败'))
   }
 }
 
 async function download() {
   if (!selected.value || downloading.value) return
-  msg.value = ''
-  sheetMsg.value = ''
   downloading.value = true
   try {
     await $fetch('/api/downloads', {
@@ -151,22 +138,14 @@ async function download() {
         lyricMode: lyricMode.value,
       },
     })
-    msg.value = '已加入下载队列'
+    toast.success('已加入下载队列')
     useDownloadBadge().notifyChanged()
     if (detailSheetOpen.value) {
-      sheetMsg.value = '已加入下载队列'
-      sheetMsgIsError.value = false
-      // 稍作反馈后再收起，避免用户感觉没反应
-      await new Promise((r) => setTimeout(r, 450))
+      await new Promise((r) => setTimeout(r, 350))
       closeDetailSheet()
     }
-  } catch (e: any) {
-    const m = e?.data?.statusMessage || e?.message || '入队失败'
-    msg.value = m
-    if (detailSheetOpen.value) {
-      sheetMsg.value = m
-      sheetMsgIsError.value = true
-    }
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
     downloading.value = false
   }
@@ -181,6 +160,7 @@ function fmtDur(sec: number) {
 
 <template>
   <div class="page">
+    <PageLoading :show="loading" text="搜索中…" />
     <div class="search-bar">
       <input
         v-model="keyword"
@@ -206,9 +186,6 @@ function fmtDur(sec: number) {
         <span class="muted">({{ p.sourceCount }})</span>
       </button>
     </div>
-
-    <p v-if="error" class="err">{{ error }}</p>
-    <p v-if="msg" class="tip">{{ msg }}</p>
 
     <div class="split">
       <div class="card list">
@@ -313,7 +290,6 @@ function fmtDur(sec: number) {
                 {{ downloading ? '入队中…' : '下载' }}
               </button>
             </div>
-            <p v-if="sheetMsg" class="sheet-feedback" :class="{ err: sheetMsgIsError }">{{ sheetMsg }}</p>
           </div>
         </div>
       </div>

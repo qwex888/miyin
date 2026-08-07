@@ -3,8 +3,6 @@ import {
   createWriteStream,
   unlinkSync,
   existsSync,
-  accessSync,
-  constants,
   statSync,
   writeFileSync,
   renameSync,
@@ -15,6 +13,11 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../utils/db'
 import { getDownloadDir } from '../utils/paths'
+import {
+  assertDownloadDirWritable,
+  ensureDownloadDirWritable,
+  isDownloadPermissionError,
+} from '../utils/downloadDir'
 import { getSettings } from './settingsService'
 import { listEnabledOkSources } from './sourceRegistry'
 import { isHighestQuality, resolveMusicUrl } from './musicUrlResolve'
@@ -147,7 +150,7 @@ export function enqueueDownload(input: {
   playlistUrl?: string
 }) {
   const settings = getSettings()
-  ensureDiskWritable(settings.downloadDir)
+  assertDownloadDirWritable(settings.downloadDir)
 
   const id = randomUUID()
   const ts = nowIso()
@@ -268,7 +271,7 @@ export function retryTask(id: string, opts?: { resetAttempts?: boolean }) {
   }
   removeTaskFiles(task)
   const settings = getSettings()
-  ensureDiskWritable(settings.downloadDir)
+  assertDownloadDirWritable(settings.downloadDir)
   getDb()
     .prepare(
       `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL, file_size=NULL,
@@ -341,7 +344,7 @@ export function switchSourceAndRetry(id: string, opts?: { sourceId?: string }) {
 
   removeTaskFiles(task)
   const settings = getSettings()
-  ensureDiskWritable(settings.downloadDir)
+  assertDownloadDirWritable(settings.downloadDir)
 
   getDb()
     .prepare(
@@ -394,15 +397,7 @@ function updateTask(id: string, patch: Partial<DownloadTaskRow>) {
 }
 
 export function ensureDiskWritable(dir: string) {
-  const resolved = getDownloadDir(dir)
-  try {
-    accessSync(resolved, constants.W_OK)
-  } catch (err: any) {
-    const e = new Error(`下载目录不可写: ${resolved}`)
-    ;(e as any).code = err?.code || 'EACCES'
-    throw e
-  }
-  return resolved
+  return assertDownloadDirWritable(dir)
 }
 
 async function resolveUrl(task: DownloadTaskRow, qualityPref: string) {
@@ -475,7 +470,7 @@ async function processTask(task: DownloadTaskRow) {
   let filePath: string | null = null
   let lyricPath: string | null = null
   try {
-    ensureDiskWritable(settings.downloadDir)
+    ensureDownloadDirWritable(settings.downloadDir)
     const musicInfo = JSON.parse(task.music_info_json || '{}')
     const { url, quality } = await resolveUrl(task, task.quality || settings.defaultQuality)
     if (cancelSet.has(task.id)) throw new Error('cancelled')
@@ -593,7 +588,11 @@ async function processTask(task: DownloadTaskRow) {
       error: null,
     })
   } catch (err: any) {
-    const msg = err?.message || String(err)
+    let msg = err?.message || String(err)
+    if (isDownloadPermissionError(err) && !/无下载目录写入权限/.test(msg)) {
+      msg = `无下载目录写入权限: ${settings.downloadDir}`
+      ;(err as any).code = 'EACCES'
+    }
     removeFileQuiet(filePath)
     removeFileQuiet(lyricPath)
     if (msg === 'cancelled' || cancelSet.has(task.id)) {
@@ -612,8 +611,9 @@ async function processTask(task: DownloadTaskRow) {
     const fixedQuality = !isHighestQuality(qualityPref)
     // 试听片段：只标失败，不自动换源/重试；由用户在队列手动换源
     const isPreview = String(err?.code) === 'PREVIEW_CLIP'
+    const isPerm = isDownloadPermissionError(err)
     // 固定音质：取链失败不换源；仅网络/磁盘类可同源重试
-    const retryable = isPreview
+    const retryable = isPreview || isPerm
       ? false
       : fixedQuality
         ? isRetryableError(err) || String(err?.code) === 'HTTP_RETRY'

@@ -22,7 +22,9 @@ const items = ref<Task[]>([])
 const allItems = ref<Task[]>([])
 const selected = ref<Set<string>>(new Set())
 const loading = ref(false)
-const msg = ref('')
+const loadingText = ref('加载中…')
+const pageLoading = ref(false)
+const toast = useToast()
 const deleteDialogOpen = ref(false)
 const deleteDialogTitle = ref('确认删除')
 const deleteDialogDesc = ref('')
@@ -97,12 +99,11 @@ async function loadOkSources(): Promise<SourceRowLite[]> {
 }
 
 async function openSwitchForTask(t: Task) {
-  msg.value = ''
   try {
     const rows = await loadOkSources()
     const opts = optionsForPlatform(rows, t.platform)
     if (!opts.length) {
-      msg.value = `没有可用音源（平台 ${t.platform}）`
+      toast.warning(`没有可用音源（平台 ${t.platform}）`)
       return
     }
     switchPending = { mode: 'one', task: t }
@@ -110,14 +111,13 @@ async function openSwitchForTask(t: Task) {
     switchDialogTitle.value = '选择音源'
     switchDialogDesc.value = `为「${t.title}」选择音源后重新下载，并记住为默认选项。`
     switchDialogOpen.value = true
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '加载音源失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载音源失败'))
   }
 }
 
 async function openSwitchForBatch() {
   if (!selectedCount.value) return
-  msg.value = ''
   const tasks = items.value.filter((t) => selected.value.has(t.id))
   if (!tasks.length) return
   try {
@@ -125,7 +125,7 @@ async function openSwitchForBatch() {
     const platforms = [...new Set(tasks.map((t) => t.platform))]
     const opts = toSwitchOptions(rows, platforms)
     if (!opts.length) {
-      msg.value = '选中任务没有可用音源'
+      toast.warning('选中任务没有可用音源')
       return
     }
     switchPending = { mode: 'batch', tasks }
@@ -136,8 +136,8 @@ async function openSwitchForBatch() {
         ? `已选 ${tasks.length} 个任务（含 ${platforms.length} 个平台）。优先使用所选音源；不支持的平台将使用该平台已记住的音源。`
         : `为选中的 ${tasks.length} 个任务选择音源后重新下载，并记住为默认选项。`
     switchDialogOpen.value = true
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '加载音源失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载音源失败'))
   }
 }
 
@@ -148,15 +148,15 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
     return
   }
   rememberSwitchSource(payload.source)
+  loadingText.value = '换源重试中…'
   loading.value = true
-  msg.value = ''
   try {
     if (pending.mode === 'one') {
       const res = await $fetch<{ sourceName: string }>(
         `/api/downloads/${pending.task.id}/switch-source`,
         { method: 'POST', body: { sourceId: payload.sourceId } },
       )
-      msg.value = `已切换至音源「${res.sourceName}」并重试`
+      toast.success(`已切换至音源「${res.sourceName}」并重试`)
     } else {
       const rows = await loadOkSources()
       const sourceById: Record<string, string> = {}
@@ -172,14 +172,16 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
       const ok = res.items.filter((i) => !i.error).length
       const fail = res.items.length - ok
       selected.value = new Set()
-      msg.value = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
+      const text = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
+      if (fail) toast.warning(text)
+      else toast.success(text)
     }
     switchDialogOpen.value = false
     switchPending = null
-    await load()
+    await load({ silent: true })
     notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '换源失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '换源失败'))
   } finally {
     loading.value = false
   }
@@ -286,10 +288,20 @@ function upsert(task: Task) {
   applyFilter()
 }
 
-async function load() {
-  const res = await $fetch<{ items: Task[] }>('/api/downloads')
-  allItems.value = res.items
-  applyFilter()
+async function load(opts?: { silent?: boolean }) {
+  if (!opts?.silent) {
+    pageLoading.value = true
+    loadingText.value = '加载队列中…'
+  }
+  try {
+    const res = await $fetch<{ items: Task[] }>('/api/downloads')
+    allItems.value = res.items
+    applyFilter()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载队列失败'))
+  } finally {
+    if (!opts?.silent) pageLoading.value = false
+  }
 }
 
 function bindDownloadEvents() {
@@ -321,16 +333,26 @@ function toggleAll() {
 
 async function cancel(t: Task) {
   if (!confirm(`确认取消任务「${t.title}」？未完成文件将被删除；若已完成也会删除本地文件。`)) return
-  await $fetch(`/api/downloads/${t.id}`, { method: 'DELETE' })
-  await load()
-  notifyChanged()
+  try {
+    await $fetch(`/api/downloads/${t.id}`, { method: 'DELETE' })
+    await load({ silent: true })
+    notifyChanged()
+    toast.success('已取消任务')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '取消失败'))
+  }
 }
 
 async function retry(t: Task) {
-  await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
-  // 留在失败 tab，刷新后该条会从当前列表消失
-  await load()
-  notifyChanged()
+  try {
+    await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
+    // 留在失败 tab，刷新后该条会从当前列表消失
+    await load({ silent: true })
+    notifyChanged()
+    toast.success('已重新入队')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '重试失败'))
+  }
 }
 
 async function switchSource(t: Task) {
@@ -359,8 +381,8 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
     deleteDialogOpen.value = false
     return
   }
+  loadingText.value = '删除中…'
   loading.value = true
-  msg.value = ''
   try {
     if (pending.mode === 'one') {
       const t = pending.task
@@ -370,22 +392,23 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
       })
       selected.value.delete(t.id)
       selected.value = new Set(selected.value)
-      msg.value = payload.deleteLocalFiles ? '已删除任务与本地文件' : '已删除任务记录'
+      toast.success(payload.deleteLocalFiles ? '已删除任务与本地文件' : '已删除任务记录')
     } else {
       const res = await $fetch<{ deleted: number }>('/api/downloads/batch-delete', {
         method: 'POST',
         body: { ids: [...selected.value], deleteLocalFiles: payload.deleteLocalFiles },
       })
       selected.value = new Set()
-      msg.value =
-        `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : '')
+      toast.success(
+        `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
+      )
     }
     deleteDialogOpen.value = false
     deletePending = null
-    await load()
+    await load({ silent: true })
     notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '删除失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '删除失败'))
   } finally {
     loading.value = false
   }
@@ -397,20 +420,22 @@ function onDeleteCancel() {
 
 async function batchCancel() {
   if (!selectedCount.value) return
-  if (!confirm(`确认取消选中的 ${selectedCount.value} 个下载任务？将删除未完成（及竞态已完成）的本地文件。`))
+  const n = selectedCount.value
+  if (!confirm(`确认取消选中的 ${n} 个下载任务？将删除未完成（及竞态已完成）的本地文件。`))
     return
   loading.value = true
+  loadingText.value = '批量取消中…'
   try {
     await $fetch('/api/downloads/batch-cancel', {
       method: 'POST',
       body: { ids: [...selected.value] },
     })
     selected.value = new Set()
-    msg.value = '已批量取消'
-    await load()
+    toast.success(`已批量取消 ${n} 个任务`)
+    await load({ silent: true })
     notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '批量取消失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '批量取消失败'))
   } finally {
     loading.value = false
   }
@@ -418,19 +443,21 @@ async function batchCancel() {
 
 async function batchRetry() {
   if (!selectedCount.value) return
-  if (!confirm(`确认重试选中的 ${selectedCount.value} 个失败任务？`)) return
+  const n = selectedCount.value
+  if (!confirm(`确认重试选中的 ${n} 个失败任务？`)) return
   loading.value = true
+  loadingText.value = '批量重试中…'
   try {
     await $fetch('/api/downloads/batch-retry', {
       method: 'POST',
       body: { ids: [...selected.value], resetAttempts: true },
     })
     selected.value = new Set()
-    msg.value = '已批量重试'
-    await load()
+    toast.success(`已批量重试 ${n} 个任务`)
+    await load({ silent: true })
     notifyChanged()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '批量重试失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '批量重试失败'))
   } finally {
     loading.value = false
   }
@@ -444,6 +471,8 @@ watch(tab, () => {
   selected.value = new Set()
   applyFilter()
 })
+const showPageLoading = computed(() => pageLoading.value || loading.value)
+
 onMounted(() => {
   // 仅订阅；建连由顶栏 startWatching 负责（若尚未启动则补一次）
   startWatching()
@@ -469,6 +498,7 @@ onActivated(() => {
 
 <template>
   <div class="page page-queue">
+    <PageLoading :show="showPageLoading" :text="loadingText" />
     <div class="tabs">
       <button
         type="button"
@@ -523,7 +553,6 @@ onActivated(() => {
         </template>
       </template>
     </div>
-    <p v-if="msg" class="tip">{{ msg }}</p>
 
     <div class="list-pane">
       <VirtualList

@@ -45,8 +45,6 @@ type MatchRow = {
 
 const url = ref('')
 const loading = ref(false)
-const msg = ref('')
-const error = ref('')
 const preview = ref<PlaylistPreview | null>(null)
 const result = ref<any>(null)
 const selected = ref<Set<number>>(new Set())
@@ -55,6 +53,8 @@ const showConfirm = ref(false)
 const confirmChoices = ref<Record<number, number | 'skip'>>({})
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
+const toast = useToast()
+const loadingText = ref('加载中…')
 
 onMounted(async () => {
   try {
@@ -94,11 +94,10 @@ function toggleAll() {
 }
 
 async function parseOnly() {
-  error.value = ''
-  msg.value = ''
   result.value = null
   matchRows.value = []
   showConfirm.value = false
+  loadingText.value = '解析歌单中…'
   loading.value = true
   try {
     const res = await $fetch<PlaylistPreview>('/api/playlist/parse', {
@@ -107,9 +106,9 @@ async function parseOnly() {
     })
     preview.value = { ...res, url: url.value }
     selected.value = new Set(res.tracks.map((_, i) => i))
-    msg.value = `解析成功：${res.title}，共 ${res.tracks.length} 首（已全选）`
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '解析失败'
+    toast.success(`解析成功：${res.title}，共 ${res.tracks.length} 首（已全选）`)
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '解析失败'))
     preview.value = null
     selected.value = new Set()
   } finally {
@@ -118,19 +117,18 @@ async function parseOnly() {
 }
 
 async function enqueueAll() {
-  error.value = ''
-  msg.value = ''
+  loadingText.value = '解析并入队中…'
   loading.value = true
   try {
-    const res = await $fetch('/api/playlist/enqueue', {
+    const res = await $fetch<{ enqueued: number; total: number; batchId: string }>('/api/playlist/enqueue', {
       method: 'POST',
       body: { url: url.value, downloadLyric: withLyric.value, lyricMode: lyricMode.value, quality: 'highest' },
     })
     result.value = res
-    msg.value = `已入队 ${res.enqueued}/${res.total}，批次 ${res.batchId}`
+    toast.success(`已入队 ${res.enqueued}/${res.total}`)
     useDownloadBadge().notifyChanged()
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '入队失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
     loading.value = false
   }
@@ -138,8 +136,7 @@ async function enqueueAll() {
 
 async function prepareSelectedDownload() {
   if (!preview.value || !selected.value.size) return
-  error.value = ''
-  msg.value = ''
+  loadingText.value = '匹配曲目中…'
   loading.value = true
   try {
     const tracks = preview.value.tracks.filter((_, i) => selected.value.has(i))
@@ -157,12 +154,12 @@ async function prepareSelectedDownload() {
     confirmChoices.value = choices
     if (res.needConfirm > 0) {
       showConfirm.value = true
-      msg.value = `需确认 ${res.needConfirm} 首低分/未命中匹配（自动通过 ${res.autoOk}）`
+      toast.warning(`需确认 ${res.needConfirm} 首低分/未命中匹配（自动通过 ${res.autoOk}）`)
     } else {
       await enqueueMatched(res.rows)
     }
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '匹配失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '匹配失败'))
   } finally {
     loading.value = false
   }
@@ -207,12 +204,13 @@ async function enqueueMatched(rows: MatchRow[]) {
   if (!preview.value) return
   const tracks = buildResolvedTracks(rows)
   if (!tracks.length) {
-    error.value = '没有可入队的曲目'
+    toast.warning('没有可入队的曲目')
     return
   }
+  loadingText.value = '入队中…'
   loading.value = true
   try {
-    const res = await $fetch('/api/playlist/enqueue', {
+    const res = await $fetch<{ enqueued: number; total: number; batchId: string }>('/api/playlist/enqueue', {
       method: 'POST',
       body: {
         url: preview.value.url || url.value,
@@ -226,10 +224,10 @@ async function enqueueMatched(rows: MatchRow[]) {
     })
     result.value = res
     showConfirm.value = false
-    msg.value = `已入队 ${res.enqueued}/${res.total}，批次 ${res.batchId}`
+    toast.success(`已入队 ${res.enqueued}/${res.total}`)
     useDownloadBadge().notifyChanged()
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '入队失败'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
     loading.value = false
   }
@@ -242,6 +240,7 @@ async function confirmAndEnqueue() {
 
 <template>
   <div class="page">
+    <PageLoading :show="loading" :text="loadingText" />
     <h2>歌单导入</h2>
     <p class="muted">
       支持网易云 / QQ / 酷狗歌单链接。解析后可多选；低分匹配会弹出人工确认。
@@ -272,8 +271,6 @@ async function confirmAndEnqueue() {
         </select>
       </label>
     </div>
-    <p v-if="msg" class="ok">{{ msg }}</p>
-    <p v-if="error" class="err">{{ error }}</p>
 
     <div v-if="preview" class="card" style="margin-top: 16px">
       <div class="preview-head">

@@ -23,7 +23,7 @@ pnpm dev
 ```bash
 docker pull qwex333/miyin:latest
 # 或
-docker pull ghcr.io/qwex888/miyin:latest
+docker pull ghcr.io/qwex333/miyin:latest
 
 docker run -d --name miyin \
   -p 18980:18980 \

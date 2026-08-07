@@ -5,6 +5,8 @@ import { URL } from 'node:url'
 import { searchPlatform } from './platformSearch'
 import { matchTrack } from './trackMatcher'
 import { enqueueDownload } from './downloadQueue'
+import { getSettings } from './settingsService'
+import { assertDownloadDirWritable } from '../utils/downloadDir'
 
 export type PlaylistTrackDraft = {
   externalId?: string
@@ -725,6 +727,9 @@ export async function matchAndEnqueuePlaylist(
   draft: PlaylistDraft,
   opts?: { quality?: string; downloadLyric?: boolean; lyricMode?: 'external' | 'embedded'; onlyMatched?: boolean },
 ) {
+  // 入队前先探测下载目录可写，避免整批「成功 0」且无明确错误
+  assertDownloadDirWritable(getSettings().downloadDir)
+
   const batchId = randomUUID()
   const results: Array<{ title: string; ok: boolean; method?: string; error?: string; taskId?: string }> = []
 

@@ -19,8 +19,12 @@ export function getDataDir(override?: string) {
   return dir
 }
 
+export function resolveDownloadDir(override?: string) {
+  return resolve(override || runtimeOrEnv('downloadDir', './downloads'))
+}
+
 export function getDownloadDir(override?: string) {
-  const dir = resolve(override || runtimeOrEnv('downloadDir', './downloads'))
+  const dir = resolveDownloadDir(override)
   mkdirSync(dir, { recursive: true })
   return dir
 }

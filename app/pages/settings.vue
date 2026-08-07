@@ -24,8 +24,10 @@ const form = reactive<Settings>({
 })
 const templateVars = ref<Array<{ key: string; desc: string }>>([])
 const ffmpegAvailable = ref<boolean | null>(null)
-const msg = ref('')
-const error = ref('')
+const formError = ref('')
+const loading = ref(false)
+const loadingText = ref('加载设置中…')
+const toast = useToast()
 
 const templatePreview = computed(() => {
   return form.nameTemplate
@@ -39,24 +41,33 @@ const templatePreview = computed(() => {
 })
 
 async function load() {
-  const res = await $fetch<Settings>('/api/settings')
-  Object.assign(form, {
-    downloadDir: res.downloadDir,
-    defaultQuality: res.defaultQuality,
-    concurrency: res.concurrency,
-    downloadLyric: res.downloadLyric,
-    lyricMode: res.lyricMode || 'external',
-    nameTemplate: res.nameTemplate,
-    autoFailover: res.autoFailover,
-    maxAttempts: res.maxAttempts,
-  })
-  templateVars.value = res.nameTemplateVars || []
-  ffmpegAvailable.value = res.ffmpegAvailable ?? null
+  loadingText.value = '加载设置中…'
+  loading.value = true
+  try {
+    const res = await $fetch<Settings>('/api/settings')
+    Object.assign(form, {
+      downloadDir: res.downloadDir,
+      defaultQuality: res.defaultQuality,
+      concurrency: res.concurrency,
+      downloadLyric: res.downloadLyric,
+      lyricMode: res.lyricMode || 'external',
+      nameTemplate: res.nameTemplate,
+      autoFailover: res.autoFailover,
+      maxAttempts: res.maxAttempts,
+    })
+    templateVars.value = res.nameTemplateVars || []
+    ffmpegAvailable.value = res.ffmpegAvailable ?? null
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载设置失败'))
+  } finally {
+    loading.value = false
+  }
 }
 
 async function save() {
-  msg.value = ''
-  error.value = ''
+  formError.value = ''
+  loadingText.value = '保存中…'
+  loading.value = true
   try {
     const res = await $fetch<Settings>('/api/settings', {
       method: 'PUT',
@@ -72,9 +83,13 @@ async function save() {
       },
     })
     Object.assign(form, res)
-    msg.value = '已保存'
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '保存失败'
+    toast.success('设置已保存')
+  } catch (e: unknown) {
+    const m = apiErrorMessage(e, '保存失败')
+    formError.value = m
+    toast.error(m)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -83,6 +98,7 @@ onMounted(load)
 
 <template>
   <div class="page">
+    <PageLoading :show="loading" :text="loadingText" />
     <h2>设置</h2>
     <p class="hint auth-hint">
       鉴权由环境变量 <code>AUTH_TOKEN</code> 控制：为空则开放模式（无登录）；非空则需口令登录。飞牛安装向导可留空。
@@ -147,9 +163,8 @@ onMounted(load)
         <input v-model="form.autoFailover" type="checkbox" />
         失败自动换源
       </label>
-      <p v-if="msg" class="ok">{{ msg }}</p>
-      <p v-if="error" class="err">{{ error }}</p>
-      <button class="btn" type="submit">保存</button>
+      <p v-if="formError" class="err">{{ formError }}</p>
+      <button class="btn" type="submit" :disabled="loading">保存</button>
     </form>
   </div>
 </template>

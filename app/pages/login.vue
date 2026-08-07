@@ -6,6 +6,7 @@ const error = ref('')
 const loading = ref(false)
 const { login } = useAuth()
 const { mode, cycle } = useTheme()
+const toast = useToast()
 
 const themeTitle = computed(() => {
   if (mode.value === 'light') return '浅色（点击切换）'
@@ -18,9 +19,12 @@ async function submit() {
   loading.value = true
   try {
     await login(token.value)
+    toast.success('登录成功')
     await navigateTo('/')
-  } catch (e: any) {
-    error.value = e?.data?.statusMessage || e?.message || '登录失败'
+  } catch (e: unknown) {
+    const m = apiErrorMessage(e, '登录失败')
+    error.value = m
+    toast.error(m)
   } finally {
     loading.value = false
   }

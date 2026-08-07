@@ -1,7 +1,6 @@
 import { z } from 'zod'
-import { accessSync, constants, mkdirSync } from 'node:fs'
 import { getDb } from '../utils/db'
-import { getDownloadDir } from '../utils/paths'
+import { assertDownloadDirWritable } from '../utils/downloadDir'
 
 export const AppSettingsSchema = z.object({
   downloadDir: z.string().min(1),
@@ -58,7 +57,7 @@ export function getSettings(): AppSettings {
 
 export function saveSettings(input: Partial<AppSettings>) {
   const next = AppSettingsSchema.parse({ ...getSettings(), ...input })
-  ensureWritableDir(next.downloadDir)
+  assertDownloadDirWritable(next.downloadDir)
   getDb()
     .prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
@@ -69,15 +68,5 @@ export function saveSettings(input: Partial<AppSettings>) {
 }
 
 export function ensureWritableDir(dir: string) {
-  const resolved = getDownloadDir(dir)
-  try {
-    mkdirSync(resolved, { recursive: true })
-    accessSync(resolved, constants.W_OK)
-  } catch (err: any) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: `下载目录不可写: ${resolved} (${err?.message || err})`,
-    })
-  }
-  return resolved
+  return assertDownloadDirWritable(dir)
 }

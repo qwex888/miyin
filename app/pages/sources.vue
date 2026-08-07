@@ -17,18 +17,31 @@ const importText = ref('')
 const addName = ref('')
 const addUrl = ref('')
 const loading = ref(false)
-const msg = ref('')
+const loadingText = ref('加载中…')
+const pageLoading = ref(true)
 const selected = ref<Set<string>>(new Set())
+const toast = useToast()
 
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
+const showPageLoading = computed(() => pageLoading.value || loading.value)
 
-async function load() {
-  const res = await $fetch<{ items: Source[] }>('/api/sources')
-  items.value = res.items
-  // 清理已不存在的选中项
-  const ids = new Set(res.items.map((s) => s.id))
-  selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
+async function load(opts?: { silent?: boolean }) {
+  if (!opts?.silent) {
+    pageLoading.value = true
+    loadingText.value = '加载音源中…'
+  }
+  try {
+    const res = await $fetch<{ items: Source[] }>('/api/sources')
+    items.value = res.items
+    // 清理已不存在的选中项
+    const ids = new Set(res.items.map((s) => s.id))
+    selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载音源失败'))
+  } finally {
+    if (!opts?.silent) pageLoading.value = false
+  }
 }
 
 function toggleOne(id: string, checked: boolean) {
@@ -47,8 +60,8 @@ function toggleAll() {
 }
 
 async function doImport() {
+  loadingText.value = '导入中…'
   loading.value = true
-  msg.value = ''
   try {
     const res = await $fetch<{
       total: number
@@ -63,15 +76,17 @@ async function doImport() {
     const ok = res.imported ?? res.results.filter((r) => r.ok).length
     const skipped = res.skipped ?? 0
     const renamed = res.renamed ?? 0
-    msg.value =
+    const text =
       `导入完成：成功 ${ok}/${res.total}` +
       (skipped ? `，跳过 ${skipped}` : '') +
       (renamed ? `，改名 ${renamed}` : '')
+    if (ok > 0) toast.success(text)
+    else toast.warning(text)
     showImport.value = false
     importText.value = ''
-    await load()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '导入失败'
+    await load({ silent: true })
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导入失败'))
   } finally {
     loading.value = false
   }
@@ -81,11 +96,11 @@ async function doAdd() {
   const name = addName.value.trim()
   const url = addUrl.value.trim()
   if (!name || !url) {
-    msg.value = '请填写名称和 URL'
+    toast.warning('请填写名称和 URL')
     return
   }
+  loadingText.value = '添加中…'
   loading.value = true
-  msg.value = ''
   try {
     const row = await $fetch<Source>('/api/sources', {
       method: 'POST',
@@ -94,26 +109,28 @@ async function doAdd() {
     showAdd.value = false
     addName.value = ''
     addUrl.value = ''
-    msg.value =
-      row.status === 'ok'
-        ? `已添加音源「${row.name}」`
-        : `已添加「${row.name}」，但检测失败：${row.last_error || row.status}`
-    await load()
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '新增失败'
+    if (row.status === 'ok') {
+      toast.success(`已添加音源「${row.name}」`)
+    } else {
+      toast.warning(`已添加「${row.name}」，但检测失败：${row.last_error || row.status}`)
+    }
+    await load({ silent: true })
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '新增失败'))
   } finally {
     loading.value = false
   }
 }
 
 async function checkAll() {
+  loadingText.value = '检测中…'
   loading.value = true
   try {
     await $fetch('/api/sources/check', { method: 'POST', body: {} })
-    await load()
-    msg.value = '检测完成'
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '检测失败'
+    await load({ silent: true })
+    toast.success('检测完成')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '检测失败'))
   } finally {
     loading.value = false
   }
@@ -121,27 +138,46 @@ async function checkAll() {
 
 async function cleanup() {
   if (!confirm('确认清理所有失效音源？此操作不可撤销。')) return
-  await $fetch('/api/sources/cleanup', { method: 'POST', body: { dryRun: false } })
-  await load()
-  msg.value = '已清理失效音源'
+  loadingText.value = '清理中…'
+  loading.value = true
+  try {
+    await $fetch('/api/sources/cleanup', { method: 'POST', body: { dryRun: false } })
+    await load({ silent: true })
+    toast.success('已清理失效音源')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '清理失败'))
+  } finally {
+    loading.value = false
+  }
 }
 
 async function toggle(s: Source) {
-  await $fetch(`/api/sources/${s.id}`, { method: 'PATCH', body: { enabled: !s.enabled } })
-  await load()
+  try {
+    await $fetch(`/api/sources/${s.id}`, { method: 'PATCH', body: { enabled: !s.enabled } })
+    await load({ silent: true })
+    toast.success(s.enabled ? `已禁用「${s.name}」` : `已启用「${s.name}」`)
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '更新失败'))
+  }
 }
 
 async function remove(s: Source) {
   if (!confirm(`确认删除音源「${s.name}」？此操作不可撤销。`)) return
-  await $fetch(`/api/sources/${s.id}`, { method: 'DELETE' })
-  selected.value.delete(s.id)
-  selected.value = new Set(selected.value)
-  await load()
+  try {
+    await $fetch(`/api/sources/${s.id}`, { method: 'DELETE' })
+    selected.value.delete(s.id)
+    selected.value = new Set(selected.value)
+    await load({ silent: true })
+    toast.success(`已删除「${s.name}」`)
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '删除失败'))
+  }
 }
 
 async function batchDelete() {
   if (!selectedCount.value) return
   if (!confirm(`确认删除选中的 ${selectedCount.value} 个音源？此操作不可撤销。`)) return
+  loadingText.value = '删除中…'
   loading.value = true
   try {
     const res = await $fetch<{ deleted: number }>('/api/sources/batch-delete', {
@@ -149,10 +185,10 @@ async function batchDelete() {
       body: { ids: [...selected.value] },
     })
     selected.value = new Set()
-    await load()
-    msg.value = `已删除 ${res.deleted} 个音源`
-  } catch (e: any) {
-    msg.value = e?.data?.statusMessage || e?.message || '批量删除失败'
+    await load({ silent: true })
+    toast.success(`已删除 ${res.deleted} 个音源`)
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '批量删除失败'))
   } finally {
     loading.value = false
   }
@@ -166,11 +202,18 @@ function platforms(s: Source) {
   }
 }
 
+function formatDate(date: string | null) {
+  if (!date) return '—'
+  const d = new Date(date)
+  return d.toLocaleString()
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div class="page">
+    <PageLoading :show="showPageLoading" :text="loadingText" />
     <div class="toolbar">
       <div class="title">
         <h2>音源管理</h2>
@@ -182,7 +225,7 @@ onMounted(load)
       <div class="actions">
         <button class="btn" type="button" @click="showAdd = true">单个新增</button>
         <button class="btn btn-ghost" type="button" @click="showImport = true">批量导入</button>
-        
+
         <button
           v-if="selectedCount > 0"
           class="btn btn-danger"
@@ -194,7 +237,6 @@ onMounted(load)
         </button>
       </div>
     </div>
-    <p v-if="msg" class="tip">{{ msg }}</p>
 
     <div class="card">
       <table class="table">
@@ -236,7 +278,7 @@ onMounted(load)
               </span>
             </td>
             <td>{{ platforms(s) }}</td>
-            <td class="muted">{{ s.last_checked_at || '—' }}</td>
+            <td class="muted">{{ formatDate(s.last_checked_at) }}</td>
             <td class="ops">
               <button class="btn btn-ghost" type="button" @click="toggle(s)">
                 {{ s.enabled ? '停用' : '启用' }}
@@ -325,6 +367,7 @@ onMounted(load)
 .url {
   font-size: 12px;
   word-break: break-all;
+  min-width: 80px;
 }
 .ops {
   display: flex;
