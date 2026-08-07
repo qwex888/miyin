@@ -49,6 +49,12 @@ const switchOptions = ref<SwitchSourceOption[]>([])
 const sourceNameById = ref<Record<string, string>>({})
 let switchPending: null | { mode: 'one'; task: Task } | { mode: 'batch'; tasks: Task[] } = null
 
+const qualityDialogOpen = ref(false)
+const qualityDialogTitle = ref('更换音质')
+const qualityDialogDesc = ref('仅对本任务生效，不会改全局默认音质，也不会影响其他下载任务。')
+const qualityCurrent = ref<string | null>(null)
+let qualityPending: Task | null = null
+
 const {
   rememberSwitchSource,
   resolveSourceIdForPlatform,
@@ -359,6 +365,43 @@ async function switchSource(t: Task) {
   await openSwitchForTask(t)
 }
 
+function openQualityForTask(t: Task) {
+  qualityPending = t
+  qualityCurrent.value = t.quality
+  qualityDialogTitle.value = '更换音质'
+  qualityDialogDesc.value = `为「${t.title}」选择音质后重新下载。仅本任务生效，不记忆默认选项。`
+  qualityDialogOpen.value = true
+}
+
+async function onQualityConfirm(payload: { quality: string }) {
+  const pending = qualityPending
+  if (!pending) {
+    qualityDialogOpen.value = false
+    return
+  }
+  loadingText.value = '换音质重试中…'
+  loading.value = true
+  try {
+    const res = await $fetch<{ quality: string }>(`/api/downloads/${pending.id}/switch-quality`, {
+      method: 'POST',
+      body: { quality: payload.quality },
+    })
+    qualityDialogOpen.value = false
+    qualityPending = null
+    await load({ silent: true })
+    notifyChanged()
+    toast.success(`已切换至音质「${qualityLabel(res.quality)}」并重试`)
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '换音质失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
+function onQualityCancel() {
+  qualityPending = null
+}
+
 async function deleteOne(t: Task) {
   deletePending = { mode: 'one', task: t }
   deleteDialogTitle.value = '删除任务'
@@ -642,6 +685,15 @@ onActivated(() => {
                 class="btn btn-ghost btn-sm"
                 type="button"
                 :disabled="loading"
+                @click="openQualityForTask(t)"
+              >
+                换音质
+              </button>
+              <button
+                v-if="t.status === 'failed' || t.status === 'cancelled'"
+                class="btn btn-ghost btn-sm"
+                type="button"
+                :disabled="loading"
                 @click="deleteOne(t)"
               >
                 删除
@@ -670,6 +722,15 @@ onActivated(() => {
       :loading="loading"
       @confirm="onSwitchConfirm"
       @cancel="onSwitchCancel"
+    />
+    <SwitchQualityDialog
+      v-model:open="qualityDialogOpen"
+      :title="qualityDialogTitle"
+      :description="qualityDialogDesc"
+      :current-quality="qualityCurrent"
+      :loading="loading"
+      @confirm="onQualityConfirm"
+      @cancel="onQualityCancel"
     />
   </div>
 </template>

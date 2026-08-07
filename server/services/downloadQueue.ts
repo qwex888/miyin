@@ -263,7 +263,7 @@ export function batchDeleteTasks(ids: string[], opts?: { deleteLocalFiles?: bool
 }
 
 /** 失败/取消后整文件重试（不续传） */
-export function retryTask(id: string, opts?: { resetAttempts?: boolean }) {
+export function retryTask(id: string, opts?: { resetAttempts?: boolean; quality?: string }) {
   const task = getTask(id)
   if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
   if (task.status === 'running') {
@@ -272,15 +272,58 @@ export function retryTask(id: string, opts?: { resetAttempts?: boolean }) {
   removeTaskFiles(task)
   const settings = getSettings()
   assertDownloadDirWritable(settings.downloadDir)
+
+  const quality = opts?.quality?.trim()
+  if (quality) {
+    const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
+    if (!allowed.has(quality)) {
+      throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
+    }
+  }
+
   getDb()
     .prepare(
       `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL, file_size=NULL,
-       attempts=?, updated_at=? WHERE id=?`,
+       attempts=?, quality=COALESCE(?, quality), updated_at=? WHERE id=?`,
     )
-    .run(opts?.resetAttempts ? 0 : task.attempts, nowIso(), id)
+    .run(opts?.resetAttempts ? 0 : task.attempts, quality || null, nowIso(), id)
   emitTask(id)
   kickWorker()
   return getTask(id)!
+}
+
+/**
+ * 仅更换本任务音质并重新入队；不改全局设置、不记忆默认音质。
+ */
+export function switchQualityAndRetry(id: string, quality: string) {
+  const task = getTask(id)
+  if (!task) throw createError({ statusCode: 404, statusMessage: '任务不存在' })
+  if (task.status === 'running' || task.status === 'queued') {
+    throw createError({ statusCode: 400, statusMessage: '任务进行中，请先取消再换音质' })
+  }
+  const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
+  if (!allowed.has(quality)) {
+    throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
+  }
+
+  removeTaskFiles(task)
+  const settings = getSettings()
+  assertDownloadDirWritable(settings.downloadDir)
+
+  getDb()
+    .prepare(
+      `UPDATE download_tasks SET status='queued', progress=0, error=NULL, file_path=NULL, lyric_path=NULL, file_size=NULL,
+       quality=?, attempts=0, updated_at=? WHERE id=?`,
+    )
+    .run(quality, nowIso(), id)
+  emitTask(id)
+  kickWorker()
+  const fresh = getTask(id)!
+  return {
+    task: fresh,
+    previousQuality: task.quality,
+    quality,
+  }
 }
 
 export function batchRetryTasks(ids: string[], opts?: { resetAttempts?: boolean }) {
