@@ -60,28 +60,57 @@ EOF
 
 (
   cd "$SERVER_DIR"
-  corepack enable >/dev/null 2>&1 || true
-  if command -v pnpm >/dev/null 2>&1; then
-    pnpm install --prod
+  # 必须与仓库根 pnpm workspace 隔离，否则会装到 ../../../../.. 而本目录无 node_modules
+  if command -v npm >/dev/null 2>&1; then
+    npm install --omit=dev --no-package-lock --no-fund --no-audit
   else
-    npm install --omit=dev
+    corepack enable >/dev/null 2>&1 || true
+    pnpm install --prod --ignore-workspace
   fi
 )
 
 # better-sqlite3@13+ 在 npm 包内自带各平台 prebuilds；校验 x86/arm 均在
-PREBUILD_DIR=""
-for cand in \
-  "$SERVER_DIR/node_modules/better-sqlite3/prebuilds" \
-  "$SERVER_DIR/node_modules/.pnpm"/better-sqlite3@*/node_modules/better-sqlite3/prebuilds
-do
-  if [ -d "$cand" ]; then
-    PREBUILD_DIR="$cand"
-    break
+find_prebuild_dir() {
+  local base="$1"
+  local cand
+  for cand in \
+    "$base/node_modules/better-sqlite3/prebuilds" \
+    "$base/node_modules/.pnpm"/better-sqlite3@*/node_modules/better-sqlite3/prebuilds
+  do
+    # 通配可能不存在；逐个探测
+    if [ -d "$cand" ]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  # find 兜底（npm / pnpm 嵌套）
+  cand="$(find "$base/node_modules" -type d -path '*/better-sqlite3/prebuilds' 2>/dev/null | head -n 1 || true)"
+  if [ -n "$cand" ] && [ -d "$cand" ]; then
+    printf '%s' "$cand"
+    return 0
   fi
-done
+  return 1
+}
 
-if [ -z "$PREBUILD_DIR" ]; then
+PREBUILD_DIR=""
+if PREBUILD_DIR="$(find_prebuild_dir "$SERVER_DIR")"; then
+  :
+elif PREBUILD_DIR="$(find_prebuild_dir "$ROOT")"; then
+  echo "==> 从仓库根复制 better-sqlite3 到 FPK server（含 prebuilds）"
+  mkdir -p "$SERVER_DIR/node_modules"
+  # 解析实际包路径
+  SRC_PKG="$(dirname "$PREBUILD_DIR")"
+  rm -rf "$SERVER_DIR/node_modules/better-sqlite3"
+  cp -R "$SRC_PKG" "$SERVER_DIR/node_modules/better-sqlite3"
+  PREBUILD_DIR="$SERVER_DIR/node_modules/better-sqlite3/prebuilds"
+else
   echo "ERROR: 未找到 better-sqlite3/prebuilds"
+  echo "--- debug: SERVER_DIR ---"
+  ls -la "$SERVER_DIR" || true
+  ls -la "$SERVER_DIR/node_modules" 2>/dev/null || echo "(no node_modules)"
+  find "$SERVER_DIR/node_modules" -iname '*better-sqlite3*' 2>/dev/null | head -40 || true
+  echo "--- debug: ROOT ---"
+  find "$ROOT/node_modules" -type d -path '*/better-sqlite3/prebuilds' 2>/dev/null | head -10 || true
   exit 1
 fi
 

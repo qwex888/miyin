@@ -10,6 +10,7 @@
 ### Fixed
 
 - CI：适配 pnpm 11，将 `onlyBuiltDependencies` 迁移为 `pnpm-workspace.yaml` 的 `allowBuilds`，修复 `ERR_PNPM_IGNORED_BUILDS`
+- FPK 打包：server 目录改用独立 `npm install`，避免被仓库根 `pnpm-workspace` 吸走导致找不到 `better-sqlite3/prebuilds`
 
 ### Changed
 
