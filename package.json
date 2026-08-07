@@ -24,12 +24,7 @@
     "@types/better-sqlite3": "^9.6.0",
     "vitest": "^4.1.10"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "esbuild"
-    ]
-  },
+  "packageManager": "pnpm@10.28.0",
   "engines": {
     "node": ">=22"
   }

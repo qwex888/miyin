@@ -5,7 +5,10 @@
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-08-07
+### Fixed
+
+- CI：适配 pnpm 11，将 `onlyBuiltDependencies` 迁移为 `pnpm-workspace.yaml` 的 `allowBuilds`，修复 `ERR_PNPM_IGNORED_BUILDS`
+
 
 ### Added
 

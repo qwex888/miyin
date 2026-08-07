@@ -1,0 +1,4 @@
+# pnpm 11+：构建脚本白名单（原 package.json#pnpm.onlyBuiltDependencies）
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
