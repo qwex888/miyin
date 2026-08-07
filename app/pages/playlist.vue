@@ -43,10 +43,24 @@ type MatchRow = {
   error?: string
 }
 
+type EnqueueResultPayload = {
+  enqueued: number
+  total: number
+  batchId?: string
+  results?: Array<{
+    title: string
+    ok: boolean
+    method?: string
+    error?: string
+    taskId?: string
+  }>
+}
+
 const url = ref('')
 const loading = ref(false)
 const preview = ref<PlaylistPreview | null>(null)
-const result = ref<any>(null)
+const result = ref<EnqueueResultPayload | null>(null)
+const showResult = ref(false)
 const selected = ref<Set<number>>(new Set())
 const matchRows = ref<MatchRow[]>([])
 const showConfirm = ref(false)
@@ -55,6 +69,12 @@ const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
 const toast = useToast()
 const loadingText = ref('加载中…')
+
+function openEnqueueResult(res: EnqueueResultPayload) {
+  result.value = res
+  showResult.value = true
+  useDownloadBadge().notifyChanged()
+}
 
 onMounted(async () => {
   try {
@@ -120,13 +140,11 @@ async function enqueueAll() {
   loadingText.value = '解析并入队中…'
   loading.value = true
   try {
-    const res = await $fetch<{ enqueued: number; total: number; batchId: string }>('/api/playlist/enqueue', {
+    const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
       body: { url: url.value, downloadLyric: withLyric.value, lyricMode: lyricMode.value, quality: 'highest' },
     })
-    result.value = res
-    toast.success(`已入队 ${res.enqueued}/${res.total}`)
-    useDownloadBadge().notifyChanged()
+    openEnqueueResult(res)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
@@ -210,7 +228,7 @@ async function enqueueMatched(rows: MatchRow[]) {
   loadingText.value = '入队中…'
   loading.value = true
   try {
-    const res = await $fetch<{ enqueued: number; total: number; batchId: string }>('/api/playlist/enqueue', {
+    const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
       body: {
         url: preview.value.url || url.value,
@@ -222,10 +240,8 @@ async function enqueueMatched(rows: MatchRow[]) {
         quality: 'highest',
       },
     })
-    result.value = res
     showConfirm.value = false
-    toast.success(`已入队 ${res.enqueued}/${res.total}`)
-    useDownloadBadge().notifyChanged()
+    openEnqueueResult(res)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
@@ -328,21 +344,7 @@ async function confirmAndEnqueue() {
       @confirm="confirmAndEnqueue"
     />
 
-    <div v-if="result" class="card" style="margin-top: 16px">
-      <h3>入队结果</h3>
-      <p>成功 {{ result.enqueued }} / {{ result.total }}</p>
-      <VirtualList :items="result.results" :estimate-size="36" max-height="280px">
-        <template #default="{ item }">
-          <div class="result-row">
-            <span :class="item.ok ? 'ok' : 'err'">{{ item.ok ? '✓' : '✗' }}</span>
-            {{ item.title }}
-            <span v-if="item.method" class="muted">（{{ item.method }}）</span>
-            <span v-if="item.error" class="err">{{ item.error }}</span>
-          </div>
-        </template>
-      </VirtualList>
-      <NuxtLink to="/queue" class="btn" style="margin-top: 12px; display: inline-flex">查看队列</NuxtLink>
-    </div>
+    <EnqueueResultDialog v-model:open="showResult" :result="result" />
   </div>
 </template>
 
@@ -435,15 +437,6 @@ async function confirmAndEnqueue() {
   font-size: 13px;
   line-height: 1.35;
   color: var(--muted);
-}
-.result-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 100%;
-  padding: 0 4px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
 }
 
 @media (max-width: 768px) {
