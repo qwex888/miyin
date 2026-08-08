@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-08
+
 ### Added
 
 - 音源：统一新建/编辑弹窗，支持 URL、拖拽/选文件/选目录上传，以及直接编辑本地 JS（含 Key，不落库）
@@ -74,7 +76,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/qwex888/miyin/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/qwex888/miyin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qwex888/miyin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qwex888/miyin/releases/tag/v0.1.0
