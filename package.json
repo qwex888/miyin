@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@tanstack/vue-virtual": "^3.13.35",
+    "@trimjs/web-app": "^0.4.2",
     "better-sqlite3": "^13.0.3",
     "nuxt": "^4.5.1",
     "vue": "^3.5.40",

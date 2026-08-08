@@ -12,6 +12,10 @@ node_modules
 # Logs
 logs
 *.log
+/docs*
+
+# 本地 AI 规则（仅本机 Cursor，不提交）
+.cursor/rules/
 
 # Misc
 .DS_Store
@@ -23,9 +27,9 @@ logs
 .env.*
 !.env.example
 
-# Runtime data
-data/
-downloads/
+# Runtime data（仅仓库根目录，勿匹配 server/api/downloads 等源码路径）
+/data/
+/downloads/
 
 # 飞牛 FPK 构建产物
 packaging/fnos/miyin/app/server/

@@ -1,0 +1,105 @@
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+
+/** 是否运行在飞牛应用环境（具备开放 API token 或包配置目录） */
+export function isFnOsRuntime() {
+  return Boolean(process.env.TRIM_API_TOKEN || process.env.TRIM_PKGETC || process.env.TRIM_APPNAME)
+}
+
+export function getFnOsAppName() {
+  return String(process.env.TRIM_APPNAME || 'miyin').trim() || 'miyin'
+}
+
+export function getDownloadMode(): 'default' | 'custom' {
+  return process.env.DOWNLOAD_MODE === 'custom' ? 'custom' : 'default'
+}
+
+export function getMiyinEnvPath() {
+  const etc = process.env.TRIM_PKGETC
+  if (!etc) return null
+  return join(etc, 'miyin.env')
+}
+
+function shellEscape(value: string) {
+  return value.replace(/'/g, `'\\''`)
+}
+
+function readEnvMap(file: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!existsSync(file)) return out
+  const text = readFileSync(file, 'utf8')
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const m = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)='((?:\\'|[^'])*)'$/)
+    if (m) {
+      out[m[1]] = m[2].replace(/\\'/g, "'")
+      continue
+    }
+    const m2 = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (m2) {
+      let v = m2[2]
+      if ((v.startsWith("'") && v.endsWith("'")) || (v.startsWith('"') && v.endsWith('"'))) {
+        v = v.slice(1, -1)
+      }
+      out[m2[1]] = v
+    }
+  }
+  return out
+}
+
+/**
+ * 更新 miyin.env 中的下载目录相关字段，保留 AUTH_TOKEN / SESSION_SECRET。
+ */
+export function updateMiyinDownloadEnv(input: {
+  downloadMode: 'default' | 'custom'
+  customDownloadDir: string
+}) {
+  const file = getMiyinEnvPath()
+  if (!file) {
+    throw createError({ statusCode: 400, statusMessage: '非飞牛环境或缺少 TRIM_PKGETC，无法写入配置' })
+  }
+  if (input.downloadMode === 'custom') {
+    const dir = resolve(input.customDownloadDir)
+    if (!dir.startsWith('/')) {
+      throw createError({ statusCode: 400, statusMessage: '自定义下载目录必须是绝对路径' })
+    }
+  }
+
+  mkdirSync(dirname(file), { recursive: true })
+  const prev = readEnvMap(file)
+  const token = prev.AUTH_TOKEN ?? process.env.AUTH_TOKEN ?? ''
+  const secret = prev.SESSION_SECRET ?? process.env.SESSION_SECRET ?? ''
+  if (!secret) {
+    throw createError({ statusCode: 500, statusMessage: '缺少 SESSION_SECRET，请重新运行安装/配置向导' })
+  }
+
+  const mode = input.downloadMode === 'custom' ? 'custom' : 'default'
+  const customDir = mode === 'custom' ? resolve(input.customDownloadDir) : ''
+
+  const body = `# 觅音运行配置（由安装/配置向导或应用内授权写入，请勿手改敏感字段到日志）
+# AUTH_TOKEN 为空表示开放模式（免登录）
+AUTH_TOKEN='${shellEscape(token)}'
+SESSION_SECRET='${shellEscape(secret)}'
+DOWNLOAD_MODE='${shellEscape(mode)}'
+CUSTOM_DOWNLOAD_DIR='${shellEscape(customDir)}'
+`
+  writeFileSync(file, body, { encoding: 'utf8', mode: 0o600 })
+  try {
+    chmodSync(file, 0o600)
+  } catch {
+    /* ignore */
+  }
+  return { file, downloadMode: mode, customDownloadDir: customDir }
+}
+
+/** downloadDir 是否被 paths 中某一项覆盖（相等或为其子路径） */
+export function pathCoveredByRoots(downloadDir: string, roots: string[]) {
+  const target = resolve(downloadDir)
+  for (const root of roots) {
+    if (!root) continue
+    const r = resolve(root)
+    if (target === r || target.startsWith(r.endsWith('/') ? r : `${r}/`)) return true
+  }
+  return false
+}

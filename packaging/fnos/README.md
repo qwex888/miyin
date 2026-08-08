@@ -2,7 +2,9 @@
 
 觅音以 **Native 应用**（Node.js + 统一网关 Unix Socket）交付。
 
-指南：[Native 应用案例](https://developer.fnnas.com/docs/examples/native/) · [用户向导](https://developer.fnnas.com/docs/core-concepts/wizard/) · [环境变量](https://developer.fnnas.com/docs/core-concepts/environment-variables/)
+指南：[Native 应用案例](https://developer.fnnas.com/docs/examples/native/) · [用户向导](https://developer.fnnas.com/docs/core-concepts/wizard/) · [环境变量](https://developer.fnnas.com/docs/core-concepts/environment-variables/) · [开放 API / 应用共享授权](https://developer.fnnas.com/api/authorization/shared-access/)
+
+系统要求：`os_min_version=1.2.0401`，`micro_app=true`，`api-scope` 含 `trim.file.sharedAccess`。自定义下载目录可在应用设置内一键授权。
 
 ## 对外访问与端口
 

@@ -28,6 +28,18 @@ const formError = ref('')
 const loading = ref(false)
 const loadingText = ref('加载设置中…')
 const toast = useToast()
+const route = useRoute()
+const fnosBox = ref<HTMLElement | null>(null)
+const {
+  status: fnosAuth,
+  refresh: refreshFnOsAuth,
+  pickAndAuthorize,
+  authorizeCurrentPath,
+  openSystemAppSetting,
+  bindAuthMessage,
+  ensureSdk,
+} = useFnOsDirAuth()
+let unbindAuth: (() => void) | null = null
 
 const templatePreview = computed(() => {
   return form.nameTemplate
@@ -57,11 +69,60 @@ async function load() {
     })
     templateVars.value = res.nameTemplateVars || []
     ffmpegAvailable.value = res.ffmpegAvailable ?? null
+    await refreshFnOsAuth()
+    if (fnosAuth.value?.downloadDir) form.downloadDir = fnosAuth.value.downloadDir
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '加载设置失败'))
   } finally {
     loading.value = false
   }
+}
+
+async function onPickAuthorize() {
+  loadingText.value = '打开目录授权…'
+  loading.value = true
+  try {
+    const res = await pickAndAuthorize()
+    if (res?.downloadDir) form.downloadDir = res.downloadDir
+    await refreshFnOsAuth()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '选择授权失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function onAuthorizeCurrent() {
+  loadingText.value = '申请授权…'
+  loading.value = true
+  try {
+    await authorizeCurrentPath(form.downloadDir)
+    await refreshFnOsAuth()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '授权失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function onRefreshFnOs() {
+  loadingText.value = '刷新授权状态…'
+  loading.value = true
+  try {
+    await refreshFnOsAuth()
+    if (fnosAuth.value?.downloadDir) form.downloadDir = fnosAuth.value.downloadDir
+    toast.success('已刷新授权状态')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '刷新失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
+function scrollToFnOsBox() {
+  nextTick(() => {
+    fnosBox.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 }
 
 async function save() {
@@ -93,7 +154,19 @@ async function save() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await ensureSdk()
+  unbindAuth = bindAuthMessage(() => {
+    void refreshFnOsAuth()
+  })
+  await load()
+  if (route.query.fnosAuth === '1') scrollToFnOsBox()
+})
+
+onUnmounted(() => {
+  unbindAuth?.()
+  unbindAuth = null
+})
 </script>
 
 <template>
@@ -108,6 +181,34 @@ onMounted(load)
         <span>下载目录</span>
         <input v-model="form.downloadDir" class="input" />
       </label>
+
+      <div v-if="fnosAuth?.supported" ref="fnosBox" class="fnos-box">
+        <p class="fnos-title">飞牛目录授权</p>
+        <p class="hint">
+          状态：
+          <span :class="fnosAuth.authorized ? 'ok-inline' : 'warn'">
+            {{ fnosAuth.authorized ? '已授权' : '未授权' }}
+          </span>
+          <template v-if="fnosAuth.downloadMode === 'custom'">（自定义路径）</template>
+        </p>
+        <p v-if="!fnosAuth.authorized" class="hint">
+          自定义下载目录需管理员为应用授予读写权限。授权成功后请重启应用。
+        </p>
+        <div class="fnos-actions">
+          <button class="btn btn-ghost" type="button" :disabled="loading" @click="onPickAuthorize">
+            选择并授权目录
+          </button>
+          <button class="btn btn-ghost" type="button" :disabled="loading" @click="onAuthorizeCurrent">
+            授权当前路径
+          </button>
+          <button class="btn btn-ghost" type="button" :disabled="loading" @click="onRefreshFnOs">
+            刷新授权状态
+          </button>
+          <button class="btn btn-ghost" type="button" :disabled="loading" @click="openSystemAppSetting">
+            打开系统应用设置
+          </button>
+        </div>
+      </div>
       <label>
         <span>默认音质</span>
         <select v-model="form.defaultQuality" class="select">
@@ -218,6 +319,24 @@ onMounted(load)
 }
 .var-list code {
   color: var(--accent);
+}
+.fnos-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface) 92%, var(--accent) 8%);
+}
+.fnos-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 14px;
+}
+.fnos-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 768px) {
