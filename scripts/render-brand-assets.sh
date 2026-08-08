@@ -25,9 +25,10 @@ render() {
   echo "-> $out"
 }
 
-render 64  "$ROOT/packaging/fnos/miyin/app/ui/images/icon_64.png"
-render 128 "$ROOT/packaging/fnos/miyin/app/ui/images/icon_128.png"
-render 256 "$ROOT/packaging/fnos/miyin/app/ui/images/icon_256.png"
+# 飞牛桌面/应用图标需不透明白底（与 ICON*.PNG 一致）
+render 64  "$ROOT/packaging/fnos/miyin/app/ui/images/icon_64.png" "white"
+render 128 "$ROOT/packaging/fnos/miyin/app/ui/images/icon_128.png" "white"
+render 256 "$ROOT/packaging/fnos/miyin/app/ui/images/icon_256.png" "white"
 render 64  "$ROOT/packaging/fnos/miyin/ICON.PNG" "white"
 render 256 "$ROOT/packaging/fnos/miyin/ICON_256.PNG" "white"
 render 192 "$ROOT/public/logo-192.png"

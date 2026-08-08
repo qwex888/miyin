@@ -18,6 +18,7 @@
 ### Changed
 
 - 飞牛 `os_min_version` 提升至 `1.2.0401`，`manifest` 声明 `micro_app=true`；安装/配置向导说明改为引导应用内一键授权（系统应用设置仍为兜底）
+- 飞牛桌面 UI 图标 `app/ui/images/icon_{64,128,256}.png` 改为不透明白底，与 `ICON_256.PNG` 一致；`render-brand-assets.sh` 同步默认导出白底
 - `.gitignore`：运行时目录改为仅忽略仓库根 `/downloads/`、`/data/`，并忽略本地 `.cursor/rules/`
 
 ### Fixed
