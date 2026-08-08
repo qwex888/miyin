@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs'
+import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs'
 import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
 import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceImport'
@@ -30,6 +30,42 @@ function nowIso() {
 
 function idFromUrl(url: string) {
   return createHash('sha1').update(url).digest('hex').slice(0, 16)
+}
+
+function newLocalId() {
+  return createHash('sha1').update(`local:${randomUUID()}`).digest('hex').slice(0, 16)
+}
+
+function isHttpUrl(url: string) {
+  return /^https?:\/\//i.test(url.trim())
+}
+
+async function probeLocalScript(localPath: string): Promise<{
+  platforms: string[]
+  status: string
+  lastError: string | null
+}> {
+  let platforms: string[] = []
+  let status = 'unknown'
+  let lastError: string | null = null
+  const guard = acquireSourceRejectionGuard()
+  try {
+    const handle = await loadLxSource(localPath, { bypassCache: true })
+    platforms = handle.platforms
+    const netErrs = await settleSourceNetworkErrors(guard)
+    if (netErrs.length) {
+      status = 'dead'
+      lastError = `更新检测失败: ${netErrs[0]!.message}`
+    } else {
+      status = 'ok'
+    }
+  } catch (err: any) {
+    status = 'dead'
+    lastError = err?.message || String(err)
+  } finally {
+    guard.release()
+  }
+  return { platforms, status, lastError }
 }
 
 export function listSources(): SourceRow[] {
@@ -86,26 +122,10 @@ async function persistSource(input: {
   const localPath = getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
 
-  let platforms: string[] = []
-  let status = 'unknown'
-  let lastError: string | null = null
-  const guard = acquireSourceRejectionGuard()
-  try {
-    const handle = await loadLxSource(localPath, { bypassCache: true })
-    platforms = handle.platforms
-    const netErrs = await settleSourceNetworkErrors(guard)
-    if (netErrs.length) {
-      status = 'dead'
-      lastError = `更新检测失败: ${netErrs[0]!.message}`
-    } else {
-      status = 'ok'
-    }
-  } catch (err: any) {
-    status = 'dead'
-    lastError = err?.message || String(err)
-  } finally {
-    guard.release()
-  }
+  const probed = await probeLocalScript(localPath)
+  const platforms = probed.platforms
+  const status = probed.status
+  const lastError = probed.lastError
 
   const ts = nowIso()
   if (existing) {
@@ -242,14 +262,204 @@ export async function importSourcesText(text: string) {
   }
 }
 
-export function updateSource(id: string, patch: { enabled?: boolean }) {
+export function updateSource(id: string, patch: { enabled?: boolean; name?: string }) {
   const row = getSource(id)
   if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
   const enabled = patch.enabled === undefined ? row.enabled : patch.enabled ? 1 : 0
+  const name = patch.name === undefined ? row.name : cleanSourceName(patch.name)
+  if (!name || name === 'unnamed') {
+    throw createError({ statusCode: 400, statusMessage: '名称无效' })
+  }
+  if (name !== row.name && findSourceByName(name)) {
+    throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+  }
   getDb()
-    .prepare('UPDATE sources SET enabled=?, updated_at=? WHERE id=?')
-    .run(enabled, nowIso(), id)
+    .prepare('UPDATE sources SET enabled=?, name=?, updated_at=? WHERE id=?')
+    .run(enabled, name, nowIso(), id)
   return getSource(id)!
+}
+
+export function readSourceScript(id: string): string {
+  const row = getSource(id)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
+  if (!row.local_path || !existsSync(row.local_path)) {
+    throw createError({ statusCode: 404, statusMessage: '本地脚本文件不存在' })
+  }
+  return readFileSync(row.local_path, 'utf8')
+}
+
+/**
+ * 用本地脚本内容新增音源（上传 / 粘贴脚本）。
+ * url 可选；无 http(s) URL 时使用 local://<id>。
+ */
+export async function addSourceFromScript(input: {
+  name: string
+  script: string
+  url?: string
+  id?: string
+  enabled?: boolean
+}) {
+  const name = cleanSourceName(input.name)
+  const script = String(input.script || '')
+  if (!name || name === 'unnamed') {
+    throw createError({ statusCode: 400, statusMessage: '名称必填' })
+  }
+  if (!script || script.trim().length < 20) {
+    throw createError({ statusCode: 400, statusMessage: '脚本内容过短' })
+  }
+
+  let url = (input.url || '').trim()
+  let id = (input.id || '').trim()
+
+  if (url && isHttpUrl(url)) {
+    if (findSourceByUrl(url)) {
+      throw createError({ statusCode: 409, statusMessage: '该音源 URL 已存在' })
+    }
+    id = id || idFromUrl(url)
+  } else {
+    id = id || newLocalId()
+    url = url || `local://${id}`
+    if (findSourceByUrl(url)) {
+      throw createError({ statusCode: 409, statusMessage: '该音源已存在' })
+    }
+  }
+
+  if (getSource(id)) {
+    throw createError({ statusCode: 409, statusMessage: '音源 ID 已存在' })
+  }
+  if (findSourceByName(name)) {
+    throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+  }
+
+  const localPath = getSourceCachePath(id)
+  writeFileSync(localPath, script, 'utf8')
+  const probed = await probeLocalScript(localPath)
+  const ts = nowIso()
+  const enabled = input.enabled === false ? 0 : 1
+
+  getDb()
+    .prepare(
+      `INSERT INTO sources (id, name, url, mirror_url, local_path, enabled, status, platforms, last_checked_at, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      name,
+      url,
+      localPath,
+      enabled,
+      probed.status,
+      JSON.stringify(probed.platforms),
+      ts,
+      probed.lastError,
+      ts,
+      ts,
+    )
+  return getSource(id)!
+}
+
+/** 保存脚本（可同时改名）；覆盖本地文件并重载检测 */
+export async function saveSourceScript(
+  id: string,
+  input: { script: string; name?: string },
+): Promise<SourceRow> {
+  const row = getSource(id)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
+  const script = String(input.script || '')
+  if (!script || script.trim().length < 20) {
+    throw createError({ statusCode: 400, statusMessage: '脚本内容过短' })
+  }
+
+  let name = row.name
+  if (input.name !== undefined) {
+    name = cleanSourceName(input.name)
+    if (!name || name === 'unnamed') {
+      throw createError({ statusCode: 400, statusMessage: '名称无效' })
+    }
+    if (name !== row.name && findSourceByName(name)) {
+      throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+    }
+  }
+
+  const localPath = row.local_path || getSourceCachePath(id)
+  writeFileSync(localPath, script, 'utf8')
+  const probed = await probeLocalScript(localPath)
+  const ts = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE sources SET name=?, local_path=?, status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+    )
+    .run(
+      name,
+      localPath,
+      probed.status,
+      JSON.stringify(probed.platforms),
+      ts,
+      probed.lastError,
+      ts,
+      id,
+    )
+  return getSource(id)!
+}
+
+/**
+ * 从远程 URL 重新拉取并覆盖本地脚本（编辑里「更新」）。
+ * 调用前应由前端确认，避免冲掉手改 Key。
+ */
+export async function refreshSourceScriptFromUrl(id: string): Promise<SourceRow> {
+  const row = getSource(id)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
+  if (!isHttpUrl(row.url)) {
+    throw createError({ statusCode: 400, statusMessage: '该音源没有可拉取的 http(s) URL' })
+  }
+  return await upsertSourceFromRemote({
+    name: row.name,
+    url: row.url,
+    mirrorUrl: row.mirror_url || undefined,
+  })
+}
+
+/**
+ * 批量上传多个脚本文件。返回逐条结果。
+ */
+export async function addSourcesFromFiles(
+  files: Array<{ name: string; script: string }>,
+): Promise<{
+  total: number
+  imported: number
+  renamed: number
+  results: Array<Record<string, any>>
+}> {
+  if (!files.length) {
+    throw createError({ statusCode: 400, statusMessage: '未提供任何脚本文件' })
+  }
+  const takenNames = existingNameSet()
+  const results: Array<Record<string, any>> = []
+  let renamed = 0
+
+  for (const file of files) {
+    const base = cleanSourceName(file.name.replace(/\.js$/i, ''))
+    const finalName = allocateUniqueName(base, takenNames)
+    if (finalName !== base) renamed += 1
+    try {
+      const row = await addSourceFromScript({ name: finalName, script: file.script })
+      takenNames.add(finalName)
+      results.push({
+        ok: true,
+        source: row,
+        renamed: finalName !== base ? finalName : undefined,
+      })
+    } catch (err: any) {
+      results.push({ ok: false, name: base, error: err?.message || String(err) })
+    }
+  }
+
+  return {
+    total: files.length,
+    imported: results.filter((r) => r.ok).length,
+    renamed,
+    results,
+  }
 }
 
 export function deleteSource(id: string) {
@@ -331,5 +541,3 @@ export function listEnabledOkSources(platform?: string) {
     }
   })
 }
-
-void randomUUID

@@ -8,8 +8,8 @@ definePageMeta({
 const { AUTH_MSG_TYPE } = useFnOsDirAuth()
 const message = ref('正在处理授权结果…')
 
-onMounted(() => {
-  const result = parseFnOsAuthCallback()
+onMounted(async () => {
+  const result = await parseFnOsAuthCallback()
   try {
     if (window.opener && !window.opener.closed) {
       window.opener.postMessage(

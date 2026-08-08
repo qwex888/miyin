@@ -1,5 +1,4 @@
-import { TrimApp } from '@trimjs/web-app'
-import type { AppAuthResult } from '@trimjs/web-app'
+import type { AppAuthResult, TrimApp } from '@trimjs/web-app'
 
 export type FnOsDirAuthStatus = {
   supported: boolean
@@ -18,10 +17,17 @@ const AUTH_STATE_KEY = 'miyin:fnos-auth-state'
 
 let sdkSingleton: TrimApp | null = null
 
+/** @trimjs/web-app 在模块求值时读 window，禁止 SSR 静态导入 */
+async function loadTrimApp() {
+  const mod = await import('@trimjs/web-app')
+  return mod.TrimApp
+}
+
 async function getSdk() {
   if (!import.meta.client) return null
   if (!sdkSingleton) {
-    sdkSingleton = new TrimApp({ debug: false })
+    const TrimAppCtor = await loadTrimApp()
+    sdkSingleton = new TrimAppCtor({ debug: false })
   }
   await sdkSingleton.ready()
   return sdkSingleton
@@ -301,8 +307,9 @@ export function useFnOsDirAuth() {
   }
 }
 
-export function parseFnOsAuthCallback() {
+export async function parseFnOsAuthCallback() {
   if (!import.meta.client) return null
-  const sdk = new TrimApp()
+  const TrimAppCtor = await loadTrimApp()
+  const sdk = new TrimAppCtor()
   return sdk.parseAppAuthCallback(window.location.href)
 }

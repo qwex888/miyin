@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { ImportConflict } from '~/components/ImportConflictDialog.vue'
+
 type Source = {
   id: string
   name: string
@@ -12,15 +14,27 @@ type Source = {
 
 const items = ref<Source[]>([])
 const showImport = ref(false)
-const showAdd = ref(false)
+const showForm = ref(false)
+const formMode = ref<'create' | 'edit'>('create')
+const editing = ref<Source | null>(null)
 const importText = ref('')
-const addName = ref('')
-const addUrl = ref('')
 const loading = ref(false)
 const loadingText = ref('加载中…')
 const pageLoading = ref(true)
 const selected = ref<Set<string>>(new Set())
+const moreOpen = ref(false)
+const rowOpsId = ref<string | null>(null)
 const toast = useToast()
+
+const showConflict = ref(false)
+const conflictLoading = ref(false)
+const conflictPreview = ref<{
+  conflictCount: number
+  newCount: number
+  conflicts: ImportConflict[]
+} | null>(null)
+const pendingBundleFile = ref<File | null>(null)
+const bundleInput = ref<HTMLInputElement | null>(null)
 
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
@@ -34,7 +48,6 @@ async function load(opts?: { silent?: boolean }) {
   try {
     const res = await $fetch<{ items: Source[] }>('/api/sources')
     items.value = res.items
-    // 清理已不存在的选中项
     const ids = new Set(res.items.map((s) => s.id))
     selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
   } catch (e: unknown) {
@@ -57,6 +70,19 @@ function toggleAll() {
     return
   }
   selected.value = new Set(items.value.map((s) => s.id))
+}
+
+function openCreate() {
+  formMode.value = 'create'
+  editing.value = null
+  showForm.value = true
+  moreOpen.value = false
+}
+
+function openEdit(s: Source) {
+  formMode.value = 'edit'
+  editing.value = s
+  showForm.value = true
 }
 
 async function doImport() {
@@ -92,43 +118,20 @@ async function doImport() {
   }
 }
 
-async function doAdd() {
-  const name = addName.value.trim()
-  const url = addUrl.value.trim()
-  if (!name || !url) {
-    toast.warning('请填写名称和 URL')
-    return
-  }
-  loadingText.value = '添加中…'
-  loading.value = true
-  try {
-    const row = await $fetch<Source>('/api/sources', {
-      method: 'POST',
-      body: { name, url },
-    })
-    showAdd.value = false
-    addName.value = ''
-    addUrl.value = ''
-    if (row.status === 'ok') {
-      toast.success(`已添加音源「${row.name}」`)
-    } else {
-      toast.warning(`已添加「${row.name}」，但检测失败：${row.last_error || row.status}`)
-    }
-    await load({ silent: true })
-  } catch (e: unknown) {
-    toast.error(apiErrorMessage(e, '新增失败'))
-  } finally {
-    loading.value = false
-  }
-}
-
 async function checkAll() {
+  moreOpen.value = false
   loadingText.value = '检测中…'
   loading.value = true
   try {
-    await $fetch('/api/sources/check', { method: 'POST', body: {} })
+    const res = await $fetch<{ items: Array<{ id: string; status: string; error?: string }> }>(
+      '/api/sources/check',
+      { method: 'POST', body: {} },
+    )
     await load({ silent: true })
-    toast.success('检测完成')
+    const summary = summarizeSourceCheck(res.items || [])
+    if (summary.level === 'success') toast.success(summary.message)
+    else if (summary.level === 'warning') toast.warning(summary.message)
+    else toast.error(summary.message)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '检测失败'))
   } finally {
@@ -137,6 +140,7 @@ async function checkAll() {
 }
 
 async function cleanup() {
+  moreOpen.value = false
   if (!confirm('确认清理所有失效音源？此操作不可撤销。')) return
   loadingText.value = '清理中…'
   loading.value = true
@@ -194,6 +198,113 @@ async function batchDelete() {
   }
 }
 
+async function exportBundle() {
+  moreOpen.value = false
+  loadingText.value = '导出中…'
+  loading.value = true
+  try {
+    const ids = selectedCount.value > 0 ? [...selected.value] : undefined
+    const qs = ids?.length ? `?ids=${ids.map(encodeURIComponent).join(',')}` : ''
+    const blob = await $fetch<Blob>(`/api/sources/export${qs}`, { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    a.href = url
+    a.download = `miyin-sources-${stamp}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(ids?.length ? `已导出选中的 ${ids.length} 个音源` : '已导出完整包')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导出失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
+function pickBundle() {
+  moreOpen.value = false
+  bundleInput.value?.click()
+}
+
+async function onBundleSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  pendingBundleFile.value = file
+  loadingText.value = '解析完整包…'
+  loading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    fd.append('dryRun', 'true')
+    const preview = await $fetch<{
+      conflictCount: number
+      newCount: number
+      conflicts: ImportConflict[]
+      total: number
+    }>('/api/sources/import-bundle', { method: 'POST', body: fd })
+
+    if (preview.conflictCount > 0) {
+      conflictPreview.value = {
+        conflictCount: preview.conflictCount,
+        newCount: preview.newCount,
+        conflicts: preview.conflicts || [],
+      }
+      showConflict.value = true
+      return
+    }
+
+    await applyBundle('skip')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导入完整包失败'))
+    pendingBundleFile.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function applyBundle(onConflict: 'overwrite' | 'skip') {
+  const file = pendingBundleFile.value
+  if (!file) return
+  conflictLoading.value = true
+  loadingText.value = '导入完整包…'
+  loading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    fd.append('onConflict', onConflict)
+    const res = await $fetch<{
+      imported: number
+      overwritten: number
+      skipped: number
+      failed: number
+      total: number
+    }>('/api/sources/import-bundle', { method: 'POST', body: fd })
+    showConflict.value = false
+    pendingBundleFile.value = null
+    conflictPreview.value = null
+    const text =
+      `导入完成：新增 ${res.imported}` +
+      (res.overwritten ? `，覆盖 ${res.overwritten}` : '') +
+      (res.skipped ? `，跳过 ${res.skipped}` : '') +
+      (res.failed ? `，失败 ${res.failed}` : '')
+    if (res.imported + res.overwritten > 0) toast.success(text)
+    else toast.warning(text)
+    await load({ silent: true })
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导入完整包失败'))
+  } finally {
+    conflictLoading.value = false
+    loading.value = false
+  }
+}
+
+function onConflictCancel() {
+  pendingBundleFile.value = null
+  conflictPreview.value = null
+}
+
 function platforms(s: Source) {
   try {
     return (JSON.parse(s.platforms) as string[]).join(', ') || '—'
@@ -204,11 +315,37 @@ function platforms(s: Source) {
 
 function formatDate(date: string | null) {
   if (!date) return '—'
-  const d = new Date(date)
-  return d.toLocaleString()
+  return new Date(date).toLocaleString()
+}
+
+function displayUrl(s: Source) {
+  if (!s.url || s.url.startsWith('local://')) return '本地脚本'
+  return s.url
 }
 
 onMounted(load)
+
+function onDocClick(e: MouseEvent) {
+  const t = e.target as HTMLElement | null
+  if (!t?.closest?.('.more-wrap')) {
+    moreOpen.value = false
+    rowOpsId.value = null
+  }
+}
+onMounted(() => window.addEventListener('click', onDocClick))
+onBeforeUnmount(() => window.removeEventListener('click', onDocClick))
+
+function toggleRowOps(id: string) {
+  moreOpen.value = false
+  rowOpsId.value = rowOpsId.value === id ? null : id
+}
+
+function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
+  rowOpsId.value = null
+  if (action === 'toggle') void toggle(s)
+  else if (action === 'edit') openEdit(s)
+  else void remove(s)
+}
 </script>
 
 <template>
@@ -217,15 +354,9 @@ onMounted(load)
     <div class="toolbar">
       <div class="title">
         <h2>音源管理</h2>
-        <div class="actions">
-          <button class="btn btn-ghost" type="button" :disabled="loading" @click="checkAll">检测全部</button>
-          <button class="btn btn-ghost" type="button" @click="cleanup">清理失效</button>
-        </div>
       </div>
       <div class="actions">
-        <button class="btn" type="button" @click="showAdd = true">单个新增</button>
-        <button class="btn btn-ghost" type="button" @click="showImport = true">批量导入</button>
-
+        <button class="btn" type="button" @click="openCreate">单个新增</button>
         <button
           v-if="selectedCount > 0"
           class="btn btn-danger"
@@ -235,8 +366,40 @@ onMounted(load)
         >
           删除选中（{{ selectedCount }}）
         </button>
+        <div class="more-wrap">
+          <button
+            class="btn btn-ghost"
+            type="button"
+            :aria-expanded="moreOpen"
+            @click.stop="rowOpsId = null; moreOpen = !moreOpen"
+          >
+            更多
+          </button>
+          <div v-if="moreOpen" class="more-panel" role="menu" @click.stop>
+            <button type="button" role="menuitem" @click="showImport = true; moreOpen = false">
+              批量导入（文本）
+            </button>
+            <button type="button" role="menuitem" @click="pickBundle">导入完整包</button>
+            <button type="button" role="menuitem" :disabled="loading" @click="exportBundle">
+              导出完整包{{ selectedCount ? `（选中 ${selectedCount}）` : '' }}
+            </button>
+            <hr />
+            <button type="button" role="menuitem" :disabled="loading" @click="checkAll">
+              检测全部
+            </button>
+            <button type="button" role="menuitem" @click="cleanup">清理失效</button>
+          </div>
+        </div>
       </div>
     </div>
+
+    <input
+      ref="bundleInput"
+      type="file"
+      accept=".zip,application/zip"
+      hidden
+      @change="onBundleSelected"
+    />
 
     <div class="card">
       <table class="table">
@@ -263,7 +426,7 @@ onMounted(load)
             </td>
             <td>
               <strong>{{ s.name }}</strong>
-              <div class="muted url">{{ s.url }}</div>
+              <div class="muted url">{{ displayUrl(s) }}</div>
               <div v-if="s.last_error" class="err">{{ s.last_error }}</div>
             </td>
             <td>
@@ -280,54 +443,61 @@ onMounted(load)
             <td>{{ platforms(s) }}</td>
             <td class="muted">{{ formatDate(s.last_checked_at) }}</td>
             <td class="ops">
-              <button class="btn btn-ghost" type="button" @click="toggle(s)">
-                {{ s.enabled ? '停用' : '启用' }}
-              </button>
-              <button class="btn btn-ghost" type="button" @click="remove(s)">删除</button>
+              <div class="ops-desktop">
+                <button class="btn btn-ghost" type="button" @click="toggle(s)">
+                  {{ s.enabled ? '停用' : '启用' }}
+                </button>
+                <button class="btn btn-ghost" type="button" @click="openEdit(s)">编辑</button>
+                <button class="btn btn-ghost" type="button" @click="remove(s)">删除</button>
+              </div>
+              <div class="ops-mobile more-wrap">
+                <button
+                  class="btn btn-ghost ops-more-btn"
+                  type="button"
+                  :aria-expanded="rowOpsId === s.id"
+                  aria-label="行操作"
+                  @click.stop="toggleRowOps(s.id)"
+                >
+                  ···
+                </button>
+                <div v-if="rowOpsId === s.id" class="more-panel" role="menu" @click.stop>
+                  <button type="button" role="menuitem" @click="runRowOp(s, 'toggle')">
+                    {{ s.enabled ? '停用' : '启用' }}
+                  </button>
+                  <button type="button" role="menuitem" @click="runRowOp(s, 'edit')">编辑</button>
+                  <button type="button" role="menuitem" @click="runRowOp(s, 'remove')">删除</button>
+                </div>
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
-      <p v-if="!items.length" class="muted empty">暂无音源，点击「单个新增」或「批量导入」</p>
+      <p v-if="!items.length" class="muted empty">暂无音源，点击「单个新增」或「更多 → 导入」</p>
     </div>
 
-    <div v-if="showAdd" class="drawer-backdrop" @click.self="showAdd = false">
-      <div class="drawer">
-        <h3>单个新增</h3>
-        <p class="muted">填写音源名称与脚本 URL。名称或 URL 已存在时会提示错误。</p>
-        <label class="field">
-          <span>名称</span>
-          <input v-model="addName" class="input" placeholder="例如：惠布克" @keyup.enter="doAdd" />
-        </label>
-        <label class="field">
-          <span>脚本 URL</span>
-          <input
-            v-model="addUrl"
-            class="input"
-            placeholder="https://…/latest.js"
-            @keyup.enter="doAdd"
-          />
-        </label>
-        <div class="actions" style="margin-top: 12px">
-          <button
-            class="btn"
-            type="button"
-            :disabled="loading || !addName.trim() || !addUrl.trim()"
-            @click="doAdd"
-          >
-            {{ loading ? '提交中…' : '添加' }}
-          </button>
-          <button class="btn btn-ghost" type="button" @click="showAdd = false">取消</button>
-        </div>
-      </div>
-    </div>
+    <SourceFormDialog
+      v-model:open="showForm"
+      :mode="formMode"
+      :source="editing"
+      @saved="load({ silent: true })"
+    />
+
+    <ImportConflictDialog
+      v-model:open="showConflict"
+      :conflict-count="conflictPreview?.conflictCount || 0"
+      :new-count="conflictPreview?.newCount || 0"
+      :conflicts="conflictPreview?.conflicts || []"
+      :loading="conflictLoading"
+      @resolve="applyBundle"
+      @cancel="onConflictCancel"
+    />
 
     <div v-if="showImport" class="drawer-backdrop" @click.self="showImport = false">
       <div class="drawer">
-        <h3>批量导入</h3>
+        <h3>批量导入（文本）</h3>
         <p class="muted">
           支持「名称+URL」同行或换行；名称可带「：」「【】」等符号（会自动清洗）。相同 URL
-          会跳过；同名不同 URL 会改成「名称 (2)」。
+          会跳过；同名不同 URL 会改成「名称 (2)」。本地备份请用「导入完整包」。
         </p>
         <textarea v-model="importText" class="textarea" placeholder="粘贴音源文本…" />
         <div class="actions" style="margin-top: 12px">
@@ -355,7 +525,6 @@ onMounted(load)
 }
 .toolbar .title {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
 }
@@ -363,19 +532,79 @@ onMounted(load)
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.more-wrap {
+  position: relative;
+}
+.more-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  /* --card 是 HSL 分量，不能直接当颜色；用实色 surface */
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.more-panel button {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.more-panel button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.more-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.more-panel hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
 }
 .url {
+  width: 80px;
+  max-width: 80px;
   font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   word-break: break-all;
-  min-width: 80px;
 }
 .ops {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  position: relative;
 }
-.tip {
-  color: var(--accent);
+.ops-desktop {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ops-mobile {
+  display: none;
+}
+.ops-more-btn {
+  min-width: 40px;
+  letter-spacing: 1px;
+  font-weight: 700;
 }
 .err {
   color: var(--danger);
@@ -390,15 +619,6 @@ onMounted(load)
   text-align: center;
   vertical-align: middle;
 }
-.field {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-}
-.field span {
-  font-size: 13px;
-  color: var(--muted);
-}
 
 @media (max-width: 768px) {
   .toolbar {
@@ -412,20 +632,33 @@ onMounted(load)
     flex: 1;
     min-width: 0;
   }
-  .ops {
+  .more-wrap {
+    flex: 1;
+  }
+  .more-wrap > .btn {
     width: 100%;
   }
-  .ops .btn {
-    flex: 1;
-    min-height: 40px;
+  .ops {
+    width: auto;
+    justify-content: flex-end;
+  }
+  .ops-desktop {
+    display: none;
+  }
+  .ops-mobile {
+    display: block;
+  }
+  .ops-mobile > .btn {
+    width: auto;
+    min-width: 40px;
+  }
+  .ops-mobile .more-panel {
+    min-width: 140px;
   }
   .table {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-  }
-  .toolbar .title .actions {
-    width: 65%;
   }
 }
 </style>

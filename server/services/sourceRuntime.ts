@@ -204,10 +204,11 @@ export function resetSourceRejectionGuardForTests() {
   teardownRejectionGuard()
 }
 
-const CHECK_UPDATE_GRACE_MS = Number(process.env.MIYIN_SOURCE_UPDATE_GRACE_MS || 2500)
-
 /** 等待脚本异步 checkUpdate 落定，返回窗口内捕获的网络错误 */
-export async function settleSourceNetworkErrors(guard: { errors: Error[] }, ms = CHECK_UPDATE_GRACE_MS) {
+export async function settleSourceNetworkErrors(
+  guard: { errors: Error[] },
+  ms = Number(process.env.MIYIN_SOURCE_UPDATE_GRACE_MS || 2500),
+) {
   await new Promise<void>((resolve) => setTimeout(resolve, ms))
   return guard.errors.slice()
 }
