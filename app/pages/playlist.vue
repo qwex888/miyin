@@ -404,6 +404,9 @@ async function confirmAndEnqueue() {
   gap: 8px;
   font-size: 13px;
 }
+.field-inline span {
+  flex-shrink: 0;
+}
 .row .input {
   flex: 1;
   min-width: 240px;
