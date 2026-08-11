@@ -6,6 +6,10 @@ export const AppSettingsSchema = z.object({
   downloadDir: z.string().min(1),
   defaultQuality: z.enum(['highest', 'flac24bit', 'flac', '320k', '128k']).default('highest'),
   concurrency: z.number().int().min(1).max(5).default(1),
+  /** 两次启动任务之间的最小间隔（秒）；0=关闭。用于并发>1 时错开取链 */
+  taskStartIntervalSec: z.number().int().min(0).max(120).default(0),
+  /** 上一任务结束后再等待的秒数；0=关闭。用于批量串行冷静 */
+  downloadIntervalSec: z.number().int().min(0).max(120).default(0),
   downloadLyric: z.boolean().default(true),
   /** external=仅 .lrc；embedded=仅内嵌到音频 */
   lyricMode: z.enum(['external', 'embedded']).default('external'),
@@ -40,6 +44,8 @@ const DEFAULTS: AppSettings = {
   downloadDir: './downloads',
   defaultQuality: 'highest',
   concurrency: 1,
+  taskStartIntervalSec: 0,
+  downloadIntervalSec: 0,
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',

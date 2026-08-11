@@ -36,6 +36,7 @@ import {
   probeAudioDurationSeconds,
 } from '../utils/audioPreview'
 import { nextStatusAfterFailure, isRetryableError } from './downloadState'
+import { msUntilCanStartTask } from '../utils/downloadIntervals'
 
 export type { TaskStatus } from './downloadState'
 export { nextStatusAfterFailure, isRetryableError } from './downloadState'
@@ -70,7 +71,24 @@ downloadEvents.setMaxListeners(50)
 
 let running = 0
 let loopTimer: NodeJS.Timeout | null = null
+let intervalKickTimer: NodeJS.Timeout | null = null
+/** 上次启动任务时间戳（ms） */
+let lastStartedAt: number | null = null
+/** 上次任务结束时间戳（ms，成功/失败/取消均计） */
+let lastFinishedAt: number | null = null
 const cancelSet = new Set<string>()
+
+function scheduleKickAfter(ms: number) {
+  if (ms <= 0) {
+    kickWorker()
+    return
+  }
+  if (intervalKickTimer) clearTimeout(intervalKickTimer)
+  intervalKickTimer = setTimeout(() => {
+    intervalKickTimer = null
+    kickWorker()
+  }, ms)
+}
 
 function nowIso() {
   return new Date().toISOString()
@@ -736,6 +754,18 @@ function alignFileExtension(filePath: string, base: string, dir: string): string
 export async function tickWorker() {
   const settings = getSettings()
   while (running < settings.concurrency) {
+    const waitMs = msUntilCanStartTask({
+      now: Date.now(),
+      lastStartedAt,
+      lastFinishedAt,
+      taskStartIntervalSec: settings.taskStartIntervalSec,
+      downloadIntervalSec: settings.downloadIntervalSec,
+    })
+    if (waitMs > 0) {
+      scheduleKickAfter(waitMs)
+      break
+    }
+
     const next = getDb()
       .prepare(`SELECT * FROM download_tasks WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`)
       .get() as DownloadTaskRow | undefined
@@ -746,8 +776,10 @@ export async function tickWorker() {
     if (changed.changes === 0) break
     const fresh = getTask(next.id)!
     running += 1
+    lastStartedAt = Date.now()
     void processTask({ ...fresh, status: 'queued' }).finally(() => {
       running -= 1
+      lastFinishedAt = Date.now()
       kickWorker()
     })
   }

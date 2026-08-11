@@ -35,6 +35,9 @@ const {
   refresh: refreshFnOsAuth,
   dismissBanner,
 } = useFnOsDirAuth()
+const route = useRoute()
+/** KeepAlive + Teleport：离开首页时不得继续盖住其它页 */
+const showFnOsAuthDialog = computed(() => showHomeBanner.value && route.path === '/')
 
 function selectTrack(t: Track) {
   selected.value = t
@@ -53,9 +56,16 @@ function onDetailKeydown(e: KeyboardEvent) {
 
 async function loadLyricDefaults() {
   try {
-    const s = await $fetch<{ downloadLyric: boolean; lyricMode: 'external' | 'embedded' }>('/api/settings')
+    const s = await $fetch<{
+      downloadLyric: boolean
+      lyricMode: 'external' | 'embedded'
+      defaultQuality: string
+    }>('/api/settings')
     withLyric.value = s.downloadLyric
     lyricMode.value = s.lyricMode || 'external'
+    if (['highest', 'flac24bit', 'flac', '320k', '128k'].includes(s.defaultQuality)) {
+      quality.value = s.defaultQuality
+    }
   } catch {
     /* ignore */
   }
@@ -77,6 +87,8 @@ useRegisterPageRefresh(async () => {
 })
 
 function goFnOsAuthorize() {
+  // 与「稍后提醒」一样记一次关闭，避免 Teleport 遮罩带到设置页
+  dismissBanner()
   void navigateTo('/settings?fnosAuth=1')
 }
 
@@ -177,7 +189,7 @@ function fmtDur(sec: number) {
   <div class="page">
     <PageLoading :show="loading" text="搜索中…" />
     <FnOsDirAuthDialog
-      :open="showHomeBanner"
+      :open="showFnOsAuthDialog"
       @authorize="goFnOsAuthorize"
       @dismiss="dismissBanner()"
     />

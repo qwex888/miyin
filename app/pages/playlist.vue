@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { DOWNLOAD_QUALITY_OPTIONS, type DownloadQuality } from '~/utils/mediaLabels'
+
 type Track = {
   externalId?: string
   title: string
@@ -67,6 +69,7 @@ const showConfirm = ref(false)
 const confirmChoices = ref<Record<number, number | 'skip'>>({})
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
+const quality = ref<DownloadQuality>('highest')
 const toast = useToast()
 const loadingText = ref('加载中…')
 
@@ -76,20 +79,29 @@ function openEnqueueResult(res: EnqueueResultPayload) {
   useDownloadBadge().notifyChanged()
 }
 
+async function loadDefaults() {
+  const s = await $fetch<{
+    downloadLyric: boolean
+    lyricMode: 'external' | 'embedded'
+    defaultQuality: string
+  }>('/api/settings')
+  withLyric.value = s.downloadLyric
+  lyricMode.value = s.lyricMode || 'external'
+  if (DOWNLOAD_QUALITY_OPTIONS.some((o) => o.id === s.defaultQuality)) {
+    quality.value = s.defaultQuality as DownloadQuality
+  }
+}
+
 onMounted(async () => {
   try {
-    const s = await $fetch<{ downloadLyric: boolean; lyricMode: 'external' | 'embedded' }>('/api/settings')
-    withLyric.value = s.downloadLyric
-    lyricMode.value = s.lyricMode || 'external'
+    await loadDefaults()
   } catch {
     /* ignore */
   }
 })
 
 useRegisterPageRefresh(async () => {
-  const s = await $fetch<{ downloadLyric: boolean; lyricMode: 'external' | 'embedded' }>('/api/settings')
-  withLyric.value = s.downloadLyric
-  lyricMode.value = s.lyricMode || 'external'
+  await loadDefaults()
 })
 
 const selectedCount = computed(() => selected.value.size)
@@ -148,7 +160,12 @@ async function enqueueAll() {
   try {
     const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
-      body: { url: url.value, downloadLyric: withLyric.value, lyricMode: lyricMode.value, quality: 'highest' },
+      body: {
+        url: url.value,
+        downloadLyric: withLyric.value,
+        lyricMode: lyricMode.value,
+        quality: quality.value,
+      },
     })
     openEnqueueResult(res)
   } catch (e: unknown) {
@@ -243,7 +260,7 @@ async function enqueueMatched(rows: MatchRow[]) {
         tracks,
         downloadLyric: withLyric.value,
         lyricMode: lyricMode.value,
-        quality: 'highest',
+        quality: quality.value,
       },
     })
     showConfirm.value = false
@@ -281,6 +298,14 @@ async function confirmAndEnqueue() {
       </button>
     </div>
     <div class="lyric-opts">
+      <label class="field-inline">
+        <span>音质</span>
+        <select v-model="quality" class="select">
+          <option v-for="opt in DOWNLOAD_QUALITY_OPTIONS" :key="opt.id" :value="opt.id">
+            {{ opt.label }}
+          </option>
+        </select>
+      </label>
       <label class="check">
         <input v-model="withLyric" type="checkbox" />
         下载歌词

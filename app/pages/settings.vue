@@ -3,6 +3,8 @@ type Settings = {
   downloadDir: string
   defaultQuality: string
   concurrency: number
+  taskStartIntervalSec: number
+  downloadIntervalSec: number
   downloadLyric: boolean
   lyricMode: 'external' | 'embedded'
   nameTemplate: string
@@ -16,6 +18,8 @@ const form = reactive<Settings>({
   downloadDir: './downloads',
   defaultQuality: 'highest',
   concurrency: 1,
+  taskStartIntervalSec: 0,
+  downloadIntervalSec: 0,
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',
@@ -61,6 +65,8 @@ async function load() {
       downloadDir: res.downloadDir,
       defaultQuality: res.defaultQuality,
       concurrency: res.concurrency,
+      taskStartIntervalSec: res.taskStartIntervalSec ?? 0,
+      downloadIntervalSec: res.downloadIntervalSec ?? 0,
       downloadLyric: res.downloadLyric,
       lyricMode: res.lyricMode || 'external',
       nameTemplate: res.nameTemplate,
@@ -138,6 +144,8 @@ async function save() {
         downloadDir: form.downloadDir,
         defaultQuality: form.defaultQuality,
         concurrency: form.concurrency,
+        taskStartIntervalSec: form.taskStartIntervalSec,
+        downloadIntervalSec: form.downloadIntervalSec,
         downloadLyric: form.downloadLyric,
         lyricMode: form.lyricMode,
         nameTemplate: form.nameTemplate,
@@ -229,6 +237,33 @@ useRegisterPageRefresh(async () => {
         <span>并发下载数</span>
         <input v-model.number="form.concurrency" class="input" type="number" min="1" max="5" />
       </label>
+      <label>
+        <span>任务启动间隔（秒）</span>
+        <input
+          v-model.number="form.taskStartIntervalSec"
+          class="input"
+          type="number"
+          min="0"
+          max="120"
+        />
+        <p class="hint">
+          两次「开始下载」至少间隔这么久（0=关闭）。并发大于 1 时用来错开启动/取链，减轻短时连打。
+        </p>
+      </label>
+      <label>
+        <span>下载间隔（秒）</span>
+        <input
+          v-model.number="form.downloadIntervalSec"
+          class="input"
+          type="number"
+          min="0"
+          max="120"
+        />
+        <p class="hint">
+          上一首任务结束后（成功/失败/取消），再等待这么久才启动下一首（0=关闭）。批量防风控建议并发
+          1，并设 2～5 秒。
+        </p>
+      </label>
 
       <label>
         <span>文件命名模板</span>
@@ -258,7 +293,7 @@ useRegisterPageRefresh(async () => {
           <option value="embedded">仅内嵌到音频（需 ffmpeg）</option>
         </select>
         <p class="hint">
-          网易云会尽量合并双语（原文 + 翻译/罗马音）。内嵌依赖本机 ffmpeg 写标签。
+          各平台会尽量合并双语歌词。内嵌依赖本机 ffmpeg 写标签。
         </p>
         <p v-if="ffmpegAvailable === false" class="warn">
           当前环境未检测到 ffmpeg：内嵌歌词与封面元数据将跳过。飞牛 FPK 请先安装 ffmpeg。

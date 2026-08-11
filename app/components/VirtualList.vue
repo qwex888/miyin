@@ -34,7 +34,8 @@ const virtualizer = useVirtualizer(
           measureElement:
             typeof window !== 'undefined'
               ? (el: Element | null | undefined) =>
-                  (el as HTMLElement | null | undefined)?.getBoundingClientRect().height ?? props.estimateSize
+                  (el as HTMLElement | null | undefined)?.getBoundingClientRect().height ??
+                  props.estimateSize
               : undefined,
         }
       : {}),
@@ -49,6 +50,43 @@ function setRowRef(el: Element | null, index: number) {
   ;(el as HTMLElement).dataset.index = String(index)
   virtualizer.value.measureElement(el)
 }
+
+/** KeepAlive 切回 / 容器尺寸变化时强制重测，避免可见行为空 */
+function remeasureViewport() {
+  const el = parentRef.value
+  if (!el) return
+  virtualizer.value.measure()
+  // 轻推滚动触发 getVirtualItems 重算（切页后常见 scrollHeight 已就绪但未刷新）
+  const top = el.scrollTop
+  el.scrollTop = top + 0.5
+  el.scrollTop = top
+}
+
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  if (typeof ResizeObserver === 'undefined') return
+  resizeObserver = new ResizeObserver(() => remeasureViewport())
+  if (parentRef.value) resizeObserver.observe(parentRef.value)
+})
+
+watch(parentRef, (el, prev) => {
+  if (!resizeObserver) return
+  if (prev) resizeObserver.unobserve(prev)
+  if (el) {
+    resizeObserver.observe(el)
+    nextTick(() => remeasureViewport())
+  }
+})
+
+onActivated(() => {
+  nextTick(() => remeasureViewport())
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 </script>
 
 <template>

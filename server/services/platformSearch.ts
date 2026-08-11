@@ -202,6 +202,7 @@ async function searchTx(keyword: string, page: number): Promise<SearchTrack[]> {
         albumName: s.albumname,
         songmid: mid,
         hash: mid,
+        songid: s.songid || s.id,
         strMediaMid: s.strMediaMid,
         source: 'tx',
         interval: formatIntervalFromSec(Number(s.interval || 0)),
