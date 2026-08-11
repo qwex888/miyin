@@ -32,6 +32,8 @@ export function useAuth() {
       await requestFetch('/api/auth/logout', { method: 'POST' })
     } finally {
       loggedIn.value = false
+      // 销毁 KeepAlive 页、断开 SSE、清飞牛 SDK，避免残留 loading/通信
+      resetClientSession()
       if (authRequired.value) await navigateTo('/login')
       else await navigateTo('/')
     }

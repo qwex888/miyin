@@ -26,8 +26,18 @@ export const NAME_TEMPLATE_VARS = [
   { key: '{track}', desc: '音轨号（有则写入，无则为空）' },
 ] as const
 
+function envDownloadDir(): string | undefined {
+  if (typeof process.env.DOWNLOAD_DIR === 'string' && process.env.DOWNLOAD_DIR.trim()) {
+    return process.env.DOWNLOAD_DIR.trim()
+  }
+  if (typeof process.env.NUXT_DOWNLOAD_DIR === 'string' && process.env.NUXT_DOWNLOAD_DIR.trim()) {
+    return process.env.NUXT_DOWNLOAD_DIR.trim()
+  }
+  return undefined
+}
+
 const DEFAULTS: AppSettings = {
-  downloadDir: process.env.DOWNLOAD_DIR || './downloads',
+  downloadDir: './downloads',
   defaultQuality: 'highest',
   concurrency: 1,
   downloadLyric: true,
@@ -49,9 +59,9 @@ export function getSettings(): AppSettings {
     }
   }
   const merged = AppSettingsSchema.parse({ ...DEFAULTS, ...stored })
-  if (process.env.DOWNLOAD_DIR) {
-    merged.downloadDir = process.env.DOWNLOAD_DIR
-  }
+  // 飞牛 main / Docker 注入的 DOWNLOAD_DIR 优先于库内值
+  const fromEnv = envDownloadDir()
+  if (fromEnv) merged.downloadDir = fromEnv
   return merged
 }
 

@@ -5,7 +5,17 @@
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-08-08
+### Fixed
+
+- 飞牛/Docker：鉴权与目录改为优先读取进程环境变量 `AUTH_TOKEN` / `DOWNLOAD_DIR`（不再只依赖 Nuxt 的 `NUXT_*` runtimeConfig），安装向导留空口令与自定义下载路径可真正生效
+- 安装向导：填写了绝对下载路径但未切换「自定义」时，自动按 custom 写入；`cmd/main` 同步导出 `NUXT_*` 别名
+- 退出登录时销毁 KeepAlive 页面实例、断开下载 SSE、释放飞牛 SDK，避免设置页授权 loading 卡住后重登仍残留
+- 飞牛开放 API / SDK 失败改为 Toast 提示；授权相关 SDK 调用增加超时，避免遮罩一直转圈
+
+### Changed
+
+- 首页飞牛目录未授权提示由顶栏条改为遮罩弹窗（桌面居中 / 移动端底部抽屉），突出「去授权 / 稍后提醒」
+- `NuxtPage` 绑定 `pageSession`：会话内仍 keepalive，退出登录后强制重建页面
 
 ### Added
 

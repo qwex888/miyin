@@ -22,7 +22,9 @@
 |------|------|
 | `wizard_auth_token` | 访问口令 → `AUTH_TOKEN`（**选填**；留空=开放模式） |
 | `wizard_download_mode` | `default`（共享目录 `miyin/downloads`）或 `custom` |
-| `wizard_download_dir` | 自定义绝对路径（仅 custom） |
+| `wizard_download_dir` | 自定义绝对路径；若填写了 `/…` 路径即使 mode 仍为 default 也会自动按 custom 写入 |
+
+运行时：`cmd/main` 从 `miyin.env` 加载后注入 `AUTH_TOKEN` / `DOWNLOAD_DIR`（及 `NUXT_*` 别名）。应用鉴权**优先读进程环境变量**，避免 Nuxt 仅识别 `NUXT_AUTH_TOKEN` 导致向导配置不生效。
 | SESSION_SECRET | **安装时自动生成**，配置变更时保留 |
 
 装后可在应用设置中再次打开配置向导（`wizard/config`）。

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const route = useRoute()
 const config = useRuntimeConfig()
+const pageSession = usePageSession()
 
 useHead({
   title: () => config.public.appName,
@@ -37,8 +38,8 @@ useHead({
   <div class="app-shell" :class="{ 'has-bottom-nav': route.path !== '/login' }">
     <AppHeader v-if="route.path !== '/login'" />
     <main class="app-main">
-      <!-- 切换路由时缓存页面实例，SSE/轮询等通信不断开，返回可直接看最新数据 -->
-      <NuxtPage :keepalive="{ max: 10 }" />
+      <!-- 会话内 keepalive；退出登录 bump pageSession 销毁全部页面实例 -->
+      <NuxtPage :key="pageSession" :keepalive="{ max: 10 }" />
     </main>
     <AppBottomNav v-if="route.path !== '/login'" />
     <AppToast />

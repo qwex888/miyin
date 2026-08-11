@@ -69,7 +69,7 @@ async function load() {
     })
     templateVars.value = res.nameTemplateVars || []
     ffmpegAvailable.value = res.ffmpegAvailable ?? null
-    await refreshFnOsAuth()
+    await refreshFnOsAuth({ notifyError: true })
     if (fnosAuth.value?.downloadDir) form.downloadDir = fnosAuth.value.downloadDir
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '加载设置失败'))
@@ -84,7 +84,7 @@ async function onPickAuthorize() {
   try {
     const res = await pickAndAuthorize()
     if (res?.downloadDir) form.downloadDir = res.downloadDir
-    await refreshFnOsAuth()
+    await refreshFnOsAuth({ notifyError: true })
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '选择授权失败'))
   } finally {
@@ -97,7 +97,7 @@ async function onAuthorizeCurrent() {
   loading.value = true
   try {
     await authorizeCurrentPath(form.downloadDir)
-    await refreshFnOsAuth()
+    await refreshFnOsAuth({ notifyError: true })
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '授权失败'))
   } finally {
@@ -109,9 +109,11 @@ async function onRefreshFnOs() {
   loadingText.value = '刷新授权状态…'
   loading.value = true
   try {
-    await refreshFnOsAuth()
+    await refreshFnOsAuth({ notifyError: true })
     if (fnosAuth.value?.downloadDir) form.downloadDir = fnosAuth.value.downloadDir
-    toast.success('已刷新授权状态')
+    if (!fnosAuth.value?.reason || fnosAuth.value.reason === 'non-fnos') {
+      toast.success('已刷新授权状态')
+    }
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '刷新失败'))
   } finally {

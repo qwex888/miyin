@@ -1,14 +1,14 @@
 import { mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { getDataDirEnv, getDownloadDirEnv } from './runtimeEnv'
 
 function runtimeOrEnv(key: 'dataDir' | 'downloadDir', fallback: string) {
   try {
-    const config = useRuntimeConfig()
-    if (key === 'dataDir') return String(config.dataDir || fallback)
-    return String(config.downloadDir || fallback)
+    if (key === 'dataDir') return getDataDirEnv() || fallback
+    return getDownloadDirEnv() || fallback
   } catch {
-    if (key === 'dataDir') return process.env.DATA_DIR || fallback
-    return process.env.DOWNLOAD_DIR || fallback
+    if (key === 'dataDir') return process.env.DATA_DIR || process.env.NUXT_DATA_DIR || fallback
+    return process.env.DOWNLOAD_DIR || process.env.NUXT_DOWNLOAD_DIR || fallback
   }
 }
 

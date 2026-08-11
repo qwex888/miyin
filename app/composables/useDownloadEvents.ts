@@ -181,6 +181,21 @@ export function useDownloadEvents() {
     }
   }
 
+  function stopWatching() {
+    if (!import.meta.client) return
+    const rt = runtime()
+    rt.watching = false
+    clearReconnect()
+    stopPoll()
+    try {
+      rt.es?.close()
+    } catch {
+      /* ignore */
+    }
+    rt.es = null
+    connected.value = false
+  }
+
   function startWatching() {
     if (!import.meta.client) return
     if (!rt.watching) {
@@ -226,8 +241,37 @@ export function useDownloadEvents() {
     connected,
     refresh,
     startWatching,
+    stopWatching,
     notifyChanged,
     onSnapshot,
     onTask,
+  }
+}
+
+/** 退出登录等场景：关闭全局 SSE/轮询，不依赖组件实例 */
+export function stopDownloadWatching() {
+  if (!import.meta.client) return
+  const rt = runtime()
+  rt.watching = false
+  if (rt.pollTimer) {
+    clearInterval(rt.pollTimer)
+    rt.pollTimer = null
+  }
+  if (rt.reconnectTimer) {
+    clearTimeout(rt.reconnectTimer)
+    rt.reconnectTimer = null
+  }
+  try {
+    rt.es?.close()
+  } catch {
+    /* ignore */
+  }
+  rt.es = null
+  rt.errorSince = null
+  try {
+    const connected = useState('download-sse-connected', () => false)
+    connected.value = false
+  } catch {
+    /* ignore */
   }
 }

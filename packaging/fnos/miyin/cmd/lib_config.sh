@@ -33,7 +33,7 @@ miyin_gen_session_secret() {
 # 根据向导变量写入配置。保留已有 SESSION_SECRET。
 # AUTH_TOKEN 允许为空：空 = 开放模式（免登录）。
 miyin_write_config_from_wizard() {
-  local token="${wizard_auth_token:-}"
+  local token="${wizard_auth_token-}"
   local mode="${wizard_download_mode:-default}"
   local custom_dir="${wizard_download_dir:-}"
   local secret=""
@@ -43,9 +43,14 @@ miyin_write_config_from_wizard() {
     return 1
   fi
 
+  # 用户填了绝对路径但未切换 radio 到 custom 时，自动按自定义处理（常见误操作）
+  if [ -n "$custom_dir" ] && [[ "$custom_dir" == /* ]]; then
+    mode="custom"
+  fi
+
   if [ "$mode" = "custom" ]; then
     if [ -z "$custom_dir" ] || [[ "$custom_dir" != /* ]]; then
-      echo "自定义下载目录必须是以 / 开头的绝对路径" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+      echo "自定义下载目录必须是以 / 开头的绝对路径；请选择「自定义」并填写路径" >"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
       return 1
     fi
   else

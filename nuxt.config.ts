@@ -33,10 +33,12 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
-    authToken: process.env.AUTH_TOKEN ?? '',
-    dataDir: process.env.DATA_DIR || './data',
-    downloadDir: process.env.DOWNLOAD_DIR || './downloads',
-    sessionSecret: process.env.SESSION_SECRET || 'dev-change-me',
+    // 默认仅占位；运行时优先读 AUTH_TOKEN / SESSION_SECRET 等（见 server/utils/runtimeEnv.ts）
+    // Nuxt 亦可被 NUXT_AUTH_TOKEN、NUXT_SESSION_SECRET、NUXT_DATA_DIR、NUXT_DOWNLOAD_DIR 覆盖
+    authToken: '',
+    dataDir: './data',
+    downloadDir: './downloads',
+    sessionSecret: '',
     public: {
       appName: '觅音',
     },

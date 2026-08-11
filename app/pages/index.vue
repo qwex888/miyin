@@ -71,6 +71,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onDetailKeydown)
 })
 
+function goFnOsAuthorize() {
+  void navigateTo('/settings?fnosAuth=1')
+}
+
 async function doSearch() {
   if (!keyword.value.trim()) return
   loading.value = true
@@ -167,15 +171,11 @@ function fmtDur(sec: number) {
 <template>
   <div class="page">
     <PageLoading :show="loading" text="搜索中…" />
-    <div v-if="showHomeBanner" class="fnos-banner" role="status">
-      <p class="fnos-banner-text">
-        自定义下载目录尚未获得应用读写授权，下载可能异常。请在设置中完成管理员授权后重启应用。
-      </p>
-      <div class="fnos-banner-actions">
-        <NuxtLink class="btn btn-sm" to="/settings?fnosAuth=1">去授权</NuxtLink>
-        <button class="btn btn-ghost btn-sm" type="button" @click="dismissBanner()">稍后</button>
-      </div>
-    </div>
+    <FnOsDirAuthDialog
+      :open="showHomeBanner"
+      @authorize="goFnOsAuthorize"
+      @dismiss="dismissBanner()"
+    />
     <div class="search-bar">
       <input
         v-model="keyword"
@@ -318,30 +318,6 @@ function fmtDur(sec: number) {
 </template>
 
 <style scoped>
-.fnos-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--accent-soft) 80%, var(--surface));
-}
-.fnos-banner-text {
-  margin: 0;
-  flex: 1 1 220px;
-  font-size: 13px;
-  color: var(--text);
-  line-height: 1.45;
-}
-.fnos-banner-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
 .search-bar {
   display: flex;
   gap: 8px;
