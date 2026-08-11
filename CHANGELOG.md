@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-11
+
 ### Fixed
 
 - 首页飞牛授权弹窗：点「去授权」进入设置页后遮罩仍盖住设置；现会关闭弹窗，且仅在首页路由显示
@@ -94,7 +96,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/qwex888/miyin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qwex888/miyin/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/qwex888/miyin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/qwex888/miyin/compare/v0.1.0...v0.2.0
