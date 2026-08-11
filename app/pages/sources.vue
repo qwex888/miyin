@@ -323,8 +323,6 @@ function displayUrl(s: Source) {
   return s.url
 }
 
-onMounted(load)
-
 function onDocClick(e: MouseEvent) {
   const t = e.target as HTMLElement | null
   if (!t?.closest?.('.more-wrap')) {
@@ -332,8 +330,14 @@ function onDocClick(e: MouseEvent) {
     rowOpsId.value = null
   }
 }
+
+onMounted(load)
 onMounted(() => window.addEventListener('click', onDocClick))
 onBeforeUnmount(() => window.removeEventListener('click', onDocClick))
+
+useRegisterPageRefresh(async () => {
+  await load()
+})
 
 function toggleRowOps(id: string) {
   moreOpen.value = false

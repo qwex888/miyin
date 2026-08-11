@@ -86,6 +86,12 @@ onMounted(async () => {
   }
 })
 
+useRegisterPageRefresh(async () => {
+  const s = await $fetch<{ downloadLyric: boolean; lyricMode: 'external' | 'embedded' }>('/api/settings')
+  withLyric.value = s.downloadLyric
+  lyricMode.value = s.lyricMode || 'external'
+})
+
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => {
   const n = preview.value?.tracks.length || 0

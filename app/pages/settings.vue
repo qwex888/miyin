@@ -169,6 +169,10 @@ onUnmounted(() => {
   unbindAuth?.()
   unbindAuth = null
 })
+
+useRegisterPageRefresh(async () => {
+  await load()
+})
 </script>
 
 <template>

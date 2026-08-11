@@ -537,6 +537,11 @@ onBeforeUnmount(() => {
 onActivated(() => {
   bindDownloadEvents()
 })
+
+useRegisterPageRefresh(async () => {
+  await loadSourceNames()
+  await load()
+})
 </script>
 
 <template>

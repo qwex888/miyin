@@ -71,6 +71,11 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onDetailKeydown)
 })
 
+useRegisterPageRefresh(async () => {
+  await loadLyricDefaults()
+  await refreshFnOsAuth()
+})
+
 function goFnOsAuthorize() {
   void navigateTo('/settings?fnosAuth=1')
 }

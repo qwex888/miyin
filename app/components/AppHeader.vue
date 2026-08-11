@@ -5,6 +5,7 @@ const route = useRoute()
 const { logout, authRequired } = useAuth()
 const { activeCount, startWatching } = useDownloadEvents()
 const { mode, cycle } = useTheme()
+const { canRefresh, busy: refreshBusy, refreshCurrentPage } = usePageRefreshAction()
 const toast = useToast()
 
 const themeTitle = computed(() => {
@@ -44,6 +45,27 @@ onMounted(() => startWatching())
       </NuxtLink>
     </nav>
     <div class="header-actions">
+      <button
+        v-if="canRefresh"
+        class="icon-btn"
+        type="button"
+        title="刷新当前页"
+        aria-label="刷新当前页"
+        :disabled="refreshBusy"
+        @click="refreshCurrentPage"
+      >
+        <svg
+          class="ico"
+          :class="{ spin: refreshBusy }"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M21 12a9 9 0 1 1-2.6-6.3" stroke-linecap="round" />
+          <path d="M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
       <button
         class="icon-btn"
         type="button"
@@ -159,9 +181,21 @@ onMounted(() => startWatching())
 .icon-btn:hover {
   background: hsl(var(--secondary));
 }
+.icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .ico {
   width: 16px;
   height: 16px;
+}
+.ico.spin {
+  animation: header-refresh-spin 0.7s linear infinite;
+}
+@keyframes header-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 768px) {
