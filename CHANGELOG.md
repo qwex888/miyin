@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-12
+
 ### Fixed
 
 - 生产构建：平台映射改用 Nuxt `#shared` 别名，修复 Nitro 无法解析 `shared/platforms.ts` 导致 `pnpm build` 失败
@@ -100,7 +102,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/qwex888/miyin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qwex888/miyin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qwex888/miyin/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/qwex888/miyin/compare/v0.2.0...v0.2.1
