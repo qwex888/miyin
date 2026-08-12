@@ -139,7 +139,7 @@ export function mergeBilingualLyrics(original: string, translated?: string | nul
 }
 
 /**
- * 酷我 h5：同一时间戳第二次出现视为翻译（先原文后翻译）。
+ * kw h5：同一时间戳第二次出现视为翻译（先原文后翻译）。
  */
 export function splitKuwoLrcList(
   lrclist: Array<{ time?: string | number; lineLyric?: string }>,
@@ -233,7 +233,7 @@ async function resolveTxSongId(musicInfo: Record<string, any>): Promise<number |
   return Number.isFinite(id) && id > 0 ? id : null
 }
 
-/** QQ 旧接口：Base64 LRC + trans（优先） */
+/** tx 旧接口：Base64 LRC + trans（优先） */
 async function fetchTxLegacy(musicInfo: Record<string, any>): Promise<string | null> {
   const mid = String(musicInfo.songmid || musicInfo.hash || '')
   if (!mid) return null
@@ -248,7 +248,7 @@ async function fetchTxLegacy(musicInfo: Record<string, any>): Promise<string | n
   return merged || null
 }
 
-/** QQ 新接口 + QRC 解密兜底 */
+/** tx 新接口 + QRC 解密兜底 */
 async function fetchTxQrc(musicInfo: Record<string, any>): Promise<string | null> {
   const songId = await resolveTxSongId(musicInfo)
   if (!songId) return null
@@ -335,7 +335,7 @@ async function fetchMg(musicInfo: Record<string, any>): Promise<string | null> {
   if (lrcUrl) {
     lyric = (await fetchText(String(lrcUrl), { headers: { Referer: 'https://music.migu.cn/' } })) || ''
   } else if (mrcUrl) {
-    // 咪咕 MRC 需专用解密；无密钥时跳过，避免写入乱码
+    // mg MRC 需专用解密；无密钥时跳过，避免写入乱码
     lyric = ''
   }
   const trans = trcUrl

@@ -1,4 +1,5 @@
-import { searchPlatform, listSearchablePlatforms, PLATFORM_LABELS } from '~~/server/services/platformSearch'
+import { searchPlatform, listSearchablePlatforms } from '~~/server/services/platformSearch'
+import { platformLabel } from '~~/shared/platforms'
 import { listEnabledOkSources } from '~~/server/services/sourceRegistry'
 
 export default defineEventHandler(async (event) => {
@@ -12,7 +13,7 @@ export default defineEventHandler(async (event) => {
     platform,
     platforms: listSearchablePlatforms().map((p) => ({
       id: p,
-      label: PLATFORM_LABELS[p] || p,
+      label: platformLabel(p),
       sourceCount: listEnabledOkSources(p).length,
     })),
     sourceHint: sources.map((s) => s.name),

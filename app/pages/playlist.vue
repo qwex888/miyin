@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { DOWNLOAD_QUALITY_OPTIONS, type DownloadQuality } from '~/utils/mediaLabels'
+import {
+  DOWNLOAD_QUALITY_OPTIONS,
+  PLAYLIST_PLATFORM_ORDER,
+  platformListText,
+  type DownloadQuality,
+} from '~/utils/mediaLabels'
 
 type Track = {
   externalId?: string
@@ -70,6 +75,7 @@ const confirmChoices = ref<Record<number, number | 'skip'>>({})
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
 const quality = ref<DownloadQuality>('highest')
+const playlistPlatformHint = computed(() => platformListText(PLAYLIST_PLATFORM_ORDER))
 const toast = useToast()
 const loadingText = ref('加载中…')
 
@@ -282,13 +288,13 @@ async function confirmAndEnqueue() {
     <PageLoading :show="loading" :text="loadingText" />
     <h2>歌单导入</h2>
     <p class="muted">
-      支持网易云 / QQ / 酷狗歌单链接。解析后可多选；低分匹配会弹出人工确认。
+      支持 {{ playlistPlatformHint }} 歌单链接。解析后可多选；低分匹配会弹出人工确认。
     </p>
     <div class="row">
       <input
         v-model="url"
         class="input"
-        placeholder="网易云 / QQ / 酷狗歌单链接"
+        :placeholder="`${playlistPlatformHint} 歌单链接`"
       />
       <button class="btn btn-ghost" type="button" :disabled="loading || !url.trim()" @click="parseOnly">
         仅解析

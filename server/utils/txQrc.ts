@@ -1,5 +1,5 @@
 /**
- * QQ QRC 密文 → 行级 LRC（剥逐字时间标签）。
+ * tx QRC 密文 → 行级 LRC（剥逐字时间标签）。
  * 解密依赖 MIT 包 qrc-decoder（非标准 3DES + inflate）。
  */
 import { decryptQrc } from 'qrc-decoder'

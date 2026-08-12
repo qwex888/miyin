@@ -52,27 +52,6 @@ docker compose up -d
 pnpm build:fpk
 ```
 
-## 发布（维护者）
-
-1. 在 GitHub → Settings → Secrets 配置：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
-2. 在 `CHANGELOG.md` 的 `[Unreleased]` 写好本版变更（脚本会自动收成正式版本段）
-3. 工作区干净、位于 `main`，然后一键发版：
-
-```bash
-pnpm release          # 交互选择 patch / minor / major
-# 或
-pnpm release -- patch
-```
-
-脚本会：升版本号（`package.json` + 飞牛 `manifest`）→ 整理 CHANGELOG → 本地 `test`/`build` → 提交 → 打 `v*` tag → push。  
-随后 GitHub Actions「Build & Release」自动：检测 → 推送 Docker 多架构镜像 → 打 FPK 胖包 → **创建 GitHub Release 并上传 `miyin-v*.fpk`**。
-
-```bash
-# 查看进度
-open https://github.com/qwex888/miyin/actions
-open https://github.com/qwex888/miyin/releases
-```
-
 ## 常用命令
 
 ```bash
@@ -87,11 +66,10 @@ docker compose up -d
 ## 能力
 
 - 音源批量导入 / 检测 / 清理（洛雪兼容 JS，沙箱超时/熔断）；同名自动 `(2)`；URL 精确去重
-- 按平台 Tab 搜索（网易 / 酷我 / 酷狗 / QQ）
-- 左列表 + 右详情、试听、入队下载；封面懒加载；移动端底栏与搜索抽屉
+- 按平台 Tab 搜索（wy / kw / kg / tx）
 - 队列：进行中 / 已完成 / 失败，SSE 进度；音源名展示；失败可重试 / 换源
 - 下载：`highest` 多源轮询 + 音质阶梯（含 flac24bit）；固定音质失败即停
-- 歌单导入：网易云 / QQ / 酷狗；多选下载；低分匹配人工确认
+- 歌单导入：wy / tx / kg；多选下载；低分匹配人工确认
 - 可选歌词（外挂 / 内嵌）、元数据与封面写入、Token 鉴权、设置页
 - 飞牛 **Native** `.fpk` 与 Docker 多架构镜像
 
@@ -99,6 +77,7 @@ docker compose up -d
 
 - 洛雪音源脚本主要用于**取直链**；搜索由服务端平台适配完成。
 - **鉴权**：`AUTH_TOKEN` 为空 = 开放模式；非空则需登录。公网部署请设置口令。
+- 觅音不内置、不托管任何官方音源或受版权保护的音频/歌词/封面。音源脚本由用户从互联网自行获取并导入，仅用于个人学习与研究；项目本身不提供、不传播版权内容，与各官方音乐平台无关联。请遵守当地法律法规及各平台服务条款，因使用第三方音源产生的责任由使用者自行承担。
 - 变更记录见 [CHANGELOG.md](CHANGELOG.md)；贡献指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 与知音（Zhiyin Music）的关系

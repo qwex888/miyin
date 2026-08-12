@@ -51,7 +51,7 @@ function runFfmpeg(args: string[]): Promise<void> {
   })
 }
 
-/** 封面 URL 候选：原链 + http→https（网易云图床等） */
+/** 封面 URL 候选：原链 + http→https */
 function coverUrlCandidates(raw: string): string[] {
   const u = String(raw || '').trim()
   if (!u) return []
@@ -72,7 +72,7 @@ async function downloadCoverRaw(url: string, dest: string): Promise<boolean> {
     })
     if (!res.ok) return false
     const buf = Buffer.from(await res.arrayBuffer())
-    // 网易云等常返回 1～2MB PNG；放宽到 12MB，后续会压成 JPEG
+    // 部分图床常返回 1～2MB PNG；放宽到 12MB，后续会压成 JPEG
     if (buf.length < 100 || buf.length > 12 * 1024 * 1024) return false
     // 简单魔数校验，避免下到 HTML
     const isImg =
@@ -90,7 +90,7 @@ async function downloadCoverRaw(url: string, dest: string): Promise<boolean> {
 
 /**
  * 统一转成适中 JPEG 再嵌入：
- * - 网易云「.jpg」实为 PNG、体积过大时，不少播放器对 FLAC 封面不显示
+ * - 标称「.jpg」实为 PNG、体积过大时，不少播放器对 FLAC 封面不显示
  * - JPEG + ≤1000px 兼容性最好
  */
 async function prepareCoverJpeg(rawPath: string, jpegPath: string): Promise<boolean> {

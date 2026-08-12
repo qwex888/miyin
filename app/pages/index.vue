@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { SEARCH_PLATFORM_ORDER, platformLabel } from '~/utils/mediaLabels'
+
 type Track = {
   id: string
   externalId: string
@@ -14,12 +16,9 @@ type Track = {
 
 const keyword = ref('')
 const platform = ref('wy')
-const platforms = ref<Array<{ id: string; label: string; sourceCount: number }>>([
-  { id: 'wy', label: '网易云', sourceCount: 0 },
-  { id: 'kw', label: '酷我', sourceCount: 0 },
-  { id: 'kg', label: '酷狗', sourceCount: 0 },
-  { id: 'tx', label: 'QQ', sourceCount: 0 },
-])
+const platforms = ref<Array<{ id: string; label: string; sourceCount: number }>>(
+  SEARCH_PLATFORM_ORDER.map((id) => ({ id, label: platformLabel(id), sourceCount: 0 })),
+)
 const items = ref<Track[]>([])
 const selected = ref<Track | null>(null)
 const loading = ref(false)

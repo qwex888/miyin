@@ -577,7 +577,7 @@ async function processTask(task: DownloadTaskRow) {
       fileSize = null
     }
 
-    // 试听检测：有期望时长则对比；否则兜底识别 QQ/网易常见固定试听时长
+    // 试听检测：有期望时长则对比；否则兜底识别常见固定试听时长
     {
       const actual = await probeAudioDurationSeconds(filePath)
       if (actual != null) {

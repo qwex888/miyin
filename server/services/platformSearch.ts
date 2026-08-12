@@ -1,3 +1,5 @@
+import { PLATFORM_DISPLAY, platformLabel } from '../../shared/platforms'
+
 export type SearchTrack = {
   id: string
   externalId: string
@@ -41,14 +43,14 @@ async function fetchJson(url: string, init?: RequestInit) {
 }
 
 /**
- * 酷我等接口常返回单引号「伪 JSON」（{'a':'b'}），标准 JSON.parse 会在 position 1 报错。
+ * kw 等接口常返回单引号「伪 JSON」（{'a':'b'}），标准 JSON.parse 会在 position 1 报错。
  * 亦兼容 JSONP / try{var jsondata=...} 包装。
  */
 export function parseLooseJson(raw: string): any {
   let text = String(raw || '').trim()
   if (!text) throw new Error('空响应')
 
-  // JSONP / 酷我旧客户端: try{var jsondata={...};} / callback({...})
+  // JSONP / kw 旧客户端: try{var jsondata={...};} / callback({...})
   const jsonp = text.match(/^[a-zA-Z_$][\w$]*\s*\(([\s\S]*)\)\s*;?\s*$/)
   if (jsonp) text = jsonp[1]!.trim()
   const kwWrap = text.match(/^\s*try\s*\{\s*var\s+\w+\s*=\s*([\s\S]*?)\s*;?\s*\}\s*(catch[\s\S]*)?$/i)
@@ -57,7 +59,7 @@ export function parseLooseJson(raw: string): any {
   try {
     return JSON.parse(text)
   } catch {
-    // 单引号 → 双引号（酷我 r.s 当前格式；值内极少含未转义单引号）
+    // 单引号 → 双引号（kw r.s 当前格式；值内极少含未转义单引号）
     const normalized = text.replace(/'/g, '"')
     try {
       return JSON.parse(normalized)
@@ -180,7 +182,7 @@ async function searchKg(keyword: string, page: number): Promise<SearchTrack[]> {
 }
 
 async function searchTx(keyword: string, page: number): Promise<SearchTrack[]> {
-  // QQ 音乐公开搜索（轻量；可能偶发失败）
+  // tx 公开搜索（轻量；可能偶发失败）
   const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=30&format=json`
   const data = await fetchJson(url, { headers: { Referer: 'https://y.qq.com/' } })
   const list = data?.data?.song?.list || []
@@ -238,13 +240,7 @@ const adapters: Record<string, (kw: string, page: number) => Promise<SearchTrack
   tx: searchTx,
 }
 
-export const PLATFORM_LABELS: Record<string, string> = {
-  wy: '网易云',
-  kw: '酷我',
-  kg: '酷狗',
-  tx: 'QQ',
-  mg: '咪咕',
-}
+export const PLATFORM_LABELS = PLATFORM_DISPLAY
 
 const searchCache = new Map<string, { at: number; items: SearchTrack[] }>()
 const SEARCH_TTL_MS = 60_000
@@ -275,7 +271,7 @@ export async function searchPlatform(platform: string, keyword: string, page = 1
     throw createError({
       statusCode: 502,
       statusMessage: 'Bad Gateway',
-      message: `搜索失败(${PLATFORM_LABELS[platform] || platform}): ${detail}`,
+      message: `搜索失败(${platformLabel(platform)}): ${detail}`,
       data: { platform, reason: detail },
     })
   }

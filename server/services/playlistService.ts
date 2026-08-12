@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { PLAYLIST_PLATFORM_ORDER, platformLabel, platformListText } from '../../shared/platforms'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequestPlain } from 'node:http'
 import { URL } from 'node:url'
@@ -30,7 +31,7 @@ export type PlaylistDraft = {
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-/** 移动端 UA：网易云 PC 端 playlist/detail 常只返回少量 tracks，完整列表在 trackIds */
+/** 移动端 UA：wy PC 端 playlist/detail 常只返回少量 tracks，完整列表在 trackIds */
 const WY_MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 CloudMusic/8.9.10'
 
@@ -40,7 +41,7 @@ const QQ_HEADERS = {
 }
 
 /**
- * 从网易云歌单链接提取 id。
+ * 从 wy 歌单链接提取 id。
  * 支持：playlist?id= / #/playlist?id= / playlist/数字 / 纯数字 id
  */
 export function extractNeteasePlaylistId(raw: string): string | null {
@@ -63,7 +64,7 @@ export function extractNeteasePlaylistId(raw: string): string | null {
 }
 
 /**
- * 从 QQ 音乐歌单链接提取 disstid。
+ * 从 tx 歌单链接提取 disstid。
  * 覆盖网页 / 移动分享 / 旧版 playsquare / query 参数等多种形态。
  */
 export function extractQqPlaylistId(raw: string): string | null {
@@ -93,7 +94,7 @@ export function extractQqPlaylistId(raw: string): string | null {
 }
 
 /**
- * 从酷狗歌单链接提取 specialid。
+ * 从 kg 歌单链接提取 specialid。
  * 支持：special/single/ID、m.kugou.com/plist/list/ID、specialid=、global_collection_id 中的数字段。
  */
 export function extractKugouPlaylistId(raw: string): string | null {
@@ -165,7 +166,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit, ms = 20000): Pr
   }
 }
 
-/** 酷狗 CDN 证书常与域名不匹配，用 Node http(s) 且不校验证书 */
+/** kg CDN 证书常与域名不匹配，用 Node http(s) 且不校验证书 */
 function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000): Promise<any> {
   return new Promise((resolve, reject) => {
     try {
@@ -382,7 +383,7 @@ async function parseQqPlaylist(id: string, url: string): Promise<PlaylistDraft> 
   }
   throw createError({
     statusCode: 502,
-    statusMessage: `QQ 歌单解析失败（已尝试多接口）：${errors.join('；')}`,
+    statusMessage: `${platformLabel('tx')} 歌单解析失败（已尝试多接口）：${errors.join('；')}`,
   })
 }
 
@@ -413,7 +414,7 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
         errors.push(`${host}: ${err?.message || err}`)
       }
     }
-    throw new Error(errors.join('；') || '酷狗接口不可用')
+    throw new Error(errors.join('；') || `${platformLabel('kg')} 接口不可用`)
   }
 
   let title = `歌单 ${id}`
@@ -457,13 +458,13 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
     })
     .filter((t) => t.title && t.title !== '未知')
 
-  if (!tracks.length) throw new Error('酷狗歌单无曲目或接口失败')
+  if (!tracks.length) throw new Error(`${platformLabel('kg')} 歌单无曲目或接口失败`)
   return { platform: 'kg', title, url, tracks }
 }
 
 /**
  * 解析歌单链接：
- * - 网易云 / QQ / 酷狗
+ * - wy / tx / kg
  */
 export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
   const raw = url.trim()
@@ -487,7 +488,7 @@ export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
     if (wyId) return await parseNeteasePlaylist(wyId, raw)
   }
 
-  // 纯数字：先网易 → QQ → 酷狗
+  // 纯数字：先 wy → tx → kg
   if (/^\d{5,}$/.test(raw)) {
     try {
       return await parseNeteasePlaylist(raw, raw)
@@ -511,7 +512,7 @@ export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
 
   throw createError({
     statusCode: 400,
-    statusMessage: '暂不支持该歌单链接，目前支持网易云 / QQ / 酷狗 playlist 链接',
+    statusMessage: `暂不支持该歌单链接，目前支持 ${platformListText(PLAYLIST_PLATFORM_ORDER)} 歌单链接`,
   })
 }
 
@@ -529,7 +530,7 @@ async function parseNeteasePlaylist(id: string, url: string): Promise<PlaylistDr
   if (data?.code && data.code !== 200) {
     throw createError({
       statusCode: 502,
-      statusMessage: `网易云歌单接口失败(${data.code}): ${data.msg || data.message || 'unknown'}`,
+      statusMessage: `${platformLabel('wy')} 歌单接口失败(${data.code}): ${data.msg || data.message || 'unknown'}`,
     })
   }
   const pl = data?.playlist

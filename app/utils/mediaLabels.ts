@@ -1,12 +1,14 @@
 /** 平台 / 音质展示文案（队列、列表等复用） */
 
-const PLATFORM_LABELS: Record<string, string> = {
-  wy: '网易云',
-  kw: '酷我',
-  kg: '酷狗',
-  tx: 'QQ',
-  mg: '咪咕',
-}
+export {
+  PLATFORM,
+  PLATFORM_DISPLAY,
+  PLAYLIST_PLATFORM_ORDER,
+  SEARCH_PLATFORM_ORDER,
+  platformLabel,
+  platformListText,
+  type PlatformId,
+} from '../../shared/platforms'
 
 const QUALITY_LABELS: Record<string, string> = {
   highest: '最高可用',
@@ -29,10 +31,6 @@ export type DownloadQuality = (typeof DOWNLOAD_QUALITY_OPTIONS)[number]['id']
 
 export function isDownloadQuality(v: unknown): v is DownloadQuality {
   return typeof v === 'string' && DOWNLOAD_QUALITY_OPTIONS.some((o) => o.id === v)
-}
-
-export function platformLabel(platform: string): string {
-  return PLATFORM_LABELS[platform] || platform
 }
 
 export function qualityLabel(quality: string): string {

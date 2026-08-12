@@ -1,5 +1,5 @@
 /**
- * 酷狗 KRC：base64 → XOR → inflate → 解析 language 翻译轨。
+ * kg KRC：base64 → XOR → inflate → 解析 language 翻译轨。
  * 算法与洛雪 / 公开实现一致（非 GPL 拷贝，按公开注释自行实现）。
  */
 import { inflateSync } from 'node:zlib'
