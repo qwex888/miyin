@@ -1,5 +1,5 @@
 import { searchPlatform, listSearchablePlatforms } from '~~/server/services/platformSearch'
-import { platformLabel } from '~~/shared/platforms'
+import { platformLabel } from '#shared/platforms'
 import { listEnabledOkSources } from '~~/server/services/sourceRegistry'
 
 export default defineEventHandler(async (event) => {

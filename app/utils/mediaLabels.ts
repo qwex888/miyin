@@ -8,7 +8,7 @@ export {
   platformLabel,
   platformListText,
   type PlatformId,
-} from '../../shared/platforms'
+} from '#shared/platforms'
 
 const QUALITY_LABELS: Record<string, string> = {
   highest: '最高可用',

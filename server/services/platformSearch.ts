@@ -1,4 +1,4 @@
-import { PLATFORM_DISPLAY, platformLabel } from '../../shared/platforms'
+import { PLATFORM_DISPLAY, platformLabel } from '#shared/platforms'
 
 export type SearchTrack = {
   id: string

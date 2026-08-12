@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { PLAYLIST_PLATFORM_ORDER, platformLabel, platformListText } from '../../shared/platforms'
+import { PLAYLIST_PLATFORM_ORDER, platformLabel, platformListText } from '#shared/platforms'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequestPlain } from 'node:http'
 import { URL } from 'node:url'

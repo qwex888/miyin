@@ -4,7 +4,7 @@ import {
   PLAYLIST_PLATFORM_ORDER,
   platformLabel,
   platformListText,
-} from '../shared/platforms'
+} from '#shared/platforms'
 
 describe('platform display map', () => {
   it('labels follow PLATFORM_DISPLAY values', () => {
