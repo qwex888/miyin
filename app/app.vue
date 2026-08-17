@@ -48,19 +48,23 @@ useHead({
 
 <style scoped>
 .app-shell {
-  height: 100dvh;
+  height: 100%;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
 }
+/* 主内容区（body）：壳层内唯一页面级滚动容器 */
 .app-main {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
-/* 让子页面可撑满主内容区，页内 loading 遮罩有足够高度 */
+/* 子页面至少撑满可视主区，便于队列等页 height:100% 内部滚动 */
 .app-main > * {
   min-height: 100%;
   box-sizing: border-box;

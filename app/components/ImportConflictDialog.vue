@@ -5,7 +5,7 @@ export type ImportConflict = {
   url: string
   existingId: string
   existingName: string
-  reason: 'id' | 'url'
+  reason: 'id' | 'url' | 'name'
 }
 
 const open = defineModel<boolean>('open', { default: false })
@@ -16,12 +16,15 @@ const props = withDefaults(
     newCount?: number
     conflicts?: ImportConflict[]
     loading?: boolean
+    /** 冲突说明文案；默认覆盖完整包场景 */
+    description?: string
   }>(),
   {
     conflictCount: 0,
     newCount: 0,
     conflicts: () => [],
     loading: false,
+    description: '',
   },
 )
 
@@ -29,6 +32,17 @@ const emit = defineEmits<{
   resolve: [action: 'overwrite' | 'skip']
   cancel: []
 }>()
+
+const descriptionText = computed(() => {
+  if (props.description) return props.description
+  return `有 ${props.conflictCount} 个与现有音源冲突，另有 ${props.newCount} 个可直接新增。请选择对冲突项的处理方式：`
+})
+
+function reasonLabel(reason: ImportConflict['reason']) {
+  if (reason === 'id') return 'ID'
+  if (reason === 'url') return 'URL'
+  return '同名'
+}
 
 function onCancel() {
   if (props.loading) return
@@ -47,13 +61,10 @@ function choose(action: 'overwrite' | 'skip') {
     <div v-if="open" class="drawer-backdrop" @click.self="onCancel">
       <div class="drawer" role="alertdialog" aria-modal="true">
         <h3>导入冲突</h3>
-        <p class="muted">
-          完整包中有 {{ conflictCount }} 个与现有音源冲突（同 ID 或同 URL），另有
-          {{ newCount }} 个可直接新增。请选择对冲突项的处理方式：
-        </p>
+        <p class="muted">{{ descriptionText }}</p>
         <ul v-if="conflicts.length" class="list">
-          <li v-for="c in conflicts.slice(0, 8)" :key="c.id + c.existingId">
-            「{{ c.name }}」↔ 已有「{{ c.existingName }}」（{{ c.reason === 'id' ? 'ID' : 'URL' }}）
+          <li v-for="c in conflicts.slice(0, 8)" :key="c.id + c.existingId + c.name">
+            「{{ c.name }}」↔ 已有「{{ c.existingName }}」（{{ reasonLabel(c.reason) }}）
           </li>
           <li v-if="conflicts.length > 8" class="muted">…其余 {{ conflicts.length - 8 }} 项</li>
         </ul>

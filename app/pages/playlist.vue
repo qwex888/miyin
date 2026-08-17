@@ -284,7 +284,7 @@ async function confirmAndEnqueue() {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-playlist">
     <PageLoading :show="loading" :text="loadingText" />
     <h2>歌单导入</h2>
     <p class="muted">

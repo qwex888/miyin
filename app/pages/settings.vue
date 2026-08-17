@@ -184,7 +184,7 @@ useRegisterPageRefresh(async () => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-settings">
     <PageLoading :show="loading" :text="loadingText" />
     <h2>设置</h2>
     <form class="card form" @submit.prevent="save">

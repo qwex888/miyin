@@ -12,27 +12,30 @@ withDefaults(
 </script>
 
 <template>
-  <Transition name="page-loading">
-    <div
-      v-if="show"
-      class="page-loading"
-      role="status"
-      aria-live="polite"
-      aria-busy="true"
-    >
-      <div class="page-loading-card">
-        <span class="page-loading-spinner" aria-hidden="true" />
-        <p class="page-loading-text">{{ text }}</p>
+  <Teleport to="body">
+    <Transition name="page-loading">
+      <div
+        v-if="show"
+        class="page-loading"
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <div class="page-loading-card">
+          <span class="page-loading-spinner" aria-hidden="true" />
+          <p class="page-loading-text">{{ text }}</p>
+        </div>
       </div>
-    </div>
-  </Transition>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
+/* 高于抽屉/冲突弹窗（50–110），低于 Toast（10050），保证导入进度始终可见 */
 .page-loading {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -41,7 +44,6 @@ withDefaults(
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   cursor: wait;
-  /* 挡住下层点击 */
   touch-action: none;
 }
 
@@ -51,7 +53,7 @@ withDefaults(
   align-items: center;
   gap: 12px;
   min-width: 120px;
-  max-width: min(280px, 100%);
+  max-width: min(520px, 100%);
   padding: 18px 22px;
   border-radius: calc(var(--radius) + 2px);
   border: 1px solid var(--border);
@@ -76,6 +78,7 @@ withDefaults(
   color: var(--muted);
   text-align: center;
   line-height: 1.4;
+  word-break: break-word;
 }
 
 @keyframes page-loading-spin {

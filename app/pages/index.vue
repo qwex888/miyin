@@ -25,7 +25,7 @@ const loading = ref(false)
 const quality = ref('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
-const { play, current, toggle } = usePlayer()
+const { play, current, playing, toggle, stop } = usePlayer()
 const toast = useToast()
 const detailSheetOpen = ref(false)
 const downloading = ref(false)
@@ -185,7 +185,7 @@ function fmtDur(sec: number) {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-home">
     <PageLoading :show="loading" text="搜索中…" />
     <FnOsDirAuthDialog
       :open="showFnOsAuthDialog"
@@ -327,17 +327,52 @@ function fmtDur(sec: number) {
     </Teleport>
 
     <div v-if="current" class="mini">
-      <span>▶ {{ current.title }} - {{ current.artist }}</span>
-      <button class="btn btn-ghost" type="button" @click="toggle">播放/暂停</button>
+      <span class="mini-title">{{ current.title }} - {{ current.artist }}</span>
+      <div class="mini-actions">
+        <button
+          class="mini-icon-btn"
+          type="button"
+          :aria-label="playing ? '暂停' : '播放'"
+          @click="toggle"
+        >
+          <!-- 播放中显示暂停；已暂停显示播放 -->
+          <svg v-if="playing" class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
+            <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
+          </svg>
+          <svg v-else class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 5.5v13l11-6.5-11-6.5z" fill="currentColor" />
+          </svg>
+        </button>
+        <button class="mini-icon-btn" type="button" aria-label="关闭试听" @click="stop">
+          <svg class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M6.4 6.4a1 1 0 0 1 1.4 0L12 10.6l4.2-4.2a1 1 0 1 1 1.4 1.4L13.4 12l4.2 4.2a1 1 0 0 1-1.4 1.4L12 13.4l-4.2 4.2a1 1 0 0 1-1.4-1.4L10.6 12 6.4 7.8a1 1 0 0 1 0-1.4z"
+              fill="currentColor"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.page-home {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 16px;
+  box-sizing: border-box;
+}
 .search-bar {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 .search-bar .input {
   flex: 1;
@@ -352,6 +387,7 @@ function fmtDur(sec: number) {
   flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
+  flex-shrink: 0;
 }
 .tab {
   border: none;
@@ -369,14 +405,15 @@ function fmtDur(sec: number) {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
   gap: 12px;
-  min-height: 420px;
+  flex: 1;
+  min-height: 0;
 }
 @media (max-width: 768px) {
   .desktop-only {
     display: none !important;
   }
   .search-bar {
-    padding-top: 20px;
+    padding-top: 8px;
     flex-direction: column;
   }
   .search-bar .btn {
@@ -396,12 +433,7 @@ function fmtDur(sec: number) {
   }
   .split {
     grid-template-columns: 1fr;
-    min-height: 0;
     gap: 10px;
-  }
-  .list {
-    max-height: none;
-    min-height: min(60vh, 520px);
   }
   .actions {
     flex-direction: column;
@@ -415,11 +447,6 @@ function fmtDur(sec: number) {
     right: 10px;
     gap: 8px;
     font-size: 13px;
-    z-index: 25;
-  }
-  .mini .btn {
-    flex-shrink: 0;
-    min-height: 40px;
   }
 }
 
@@ -431,8 +458,9 @@ function fmtDur(sec: number) {
 
 .list {
   padding: 8px;
-  max-height: 560px;
+  min-height: 0;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .row {
   display: flex;
@@ -459,6 +487,10 @@ function fmtDur(sec: number) {
   width: 100%;
   height: 180px;
   margin-bottom: 8px;
+}
+.detail {
+  min-height: 0;
+  overflow: auto;
 }
 .title {
   font-weight: 600;
@@ -496,6 +528,7 @@ function fmtDur(sec: number) {
   left: 16px;
   right: 16px;
   bottom: 16px;
+  z-index: 35;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -503,7 +536,44 @@ function fmtDur(sec: number) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   box-shadow: var(--shadow);
+}
+.mini-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mini-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.mini-icon-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mini-ico {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .detail-sheet-overlay {

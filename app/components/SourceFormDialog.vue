@@ -21,13 +21,13 @@ const emit = defineEmits<{
 
 const toast = useToast()
 const loading = ref(false)
+const progressText = ref('')
 const name = ref('')
 const sourceTab = ref<'url' | 'upload' | 'script'>('url')
 const url = ref('')
 const scriptText = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
-const dirInput = ref<HTMLInputElement | null>(null)
-const pendingFiles = ref<File[]>([])
+const pendingFile = ref<File | null>(null)
 const dragOver = ref(false)
 const originalScript = ref('')
 
@@ -36,7 +36,7 @@ watch(
   async (v) => {
     if (!v) return
     loading.value = false
-    pendingFiles.value = []
+    pendingFile.value = null
     dragOver.value = false
     if (props.mode === 'edit' && props.source) {
       name.value = props.source.name
@@ -69,51 +69,53 @@ function onCancel() {
   open.value = false
 }
 
-function pickFiles() {
+function pickFile() {
   fileInput.value?.click()
 }
 
-function pickDir() {
-  dirInput.value?.click()
-}
-
-function collectJsFiles(list: FileList | File[] | null): File[] {
-  if (!list) return []
-  return [...list].filter((f) => /\.js$/i.test(f.name))
+function takeSingleJs(list: FileList | File[] | null): File | null {
+  if (!list?.length) return null
+  const js = [...list].filter((f) => /\.js$/i.test(f.name))
+  if (!js.length) return null
+  if (js.length > 1) {
+    toast.warning('单个新增仅支持 1 个文件，已选用第一个；批量请用「更多 → 批量导入目录（JS）」')
+  }
+  return js[0] || null
 }
 
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
-  pendingFiles.value = collectJsFiles(input.files)
-  if (pendingFiles.value.length === 1 && !name.value.trim()) {
-    name.value = pendingFiles.value[0]!.name.replace(/\.js$/i, '')
-  }
-  if (pendingFiles.value.length === 1) {
-    pendingFiles.value[0]!.text().then((t) => {
-      scriptText.value = t
-    })
-  }
+  const file = takeSingleJs(input.files)
   input.value = ''
+  if (!file) {
+    toast.warning('请选择 .js 音源文件')
+    return
+  }
+  pendingFile.value = file
+  if (!name.value.trim()) {
+    name.value = file.name.replace(/\.js$/i, '')
+  }
+  void file.text().then((t) => {
+    scriptText.value = t
+  })
 }
 
 function onDrop(e: DragEvent) {
   e.preventDefault()
   dragOver.value = false
-  const files = collectJsFiles(e.dataTransfer?.files || null)
-  if (!files.length) {
-    toast.warning('请拖入 .js 音源文件')
+  const file = takeSingleJs(e.dataTransfer?.files || null)
+  if (!file) {
+    toast.warning('请拖入单个 .js 音源文件')
     return
   }
   sourceTab.value = 'upload'
-  pendingFiles.value = files
-  if (files.length === 1 && !name.value.trim()) {
-    name.value = files[0]!.name.replace(/\.js$/i, '')
+  pendingFile.value = file
+  if (!name.value.trim()) {
+    name.value = file.name.replace(/\.js$/i, '')
   }
-  if (files.length === 1) {
-    files[0]!.text().then((t) => {
-      scriptText.value = t
-    })
-  }
+  void file.text().then((t) => {
+    scriptText.value = t
+  })
 }
 
 async function fetchUrlToScript() {
@@ -192,23 +194,8 @@ async function doSave() {
     }
 
     // create
-    if (sourceTab.value === 'upload' && pendingFiles.value.length > 1) {
-      const fd = new FormData()
-      for (const f of pendingFiles.value) fd.append('files', f, f.name)
-      const res = await $fetch<{ imported: number; total: number; renamed?: number }>('/api/sources/upload', {
-        method: 'POST',
-        body: fd,
-      })
-      open.value = false
-      toast.success(
-        `上传完成：成功 ${res.imported}/${res.total}` + (res.renamed ? `，改名 ${res.renamed}` : ''),
-      )
-      emit('saved')
-      return
-    }
-
-    if (sourceTab.value === 'upload' && pendingFiles.value.length === 1) {
-      const text = scriptText.value || (await pendingFiles.value[0]!.text())
+    if (sourceTab.value === 'upload' && pendingFile.value) {
+      const text = scriptText.value || (await pendingFile.value.text())
       const row = await $fetch<Source>('/api/sources/upload', {
         method: 'POST',
         body: { name: n, script: text },
@@ -217,6 +204,11 @@ async function doSave() {
       if (row.status === 'ok') toast.success(`已添加「${row.name}」`)
       else toast.warning(`已添加「${row.name}」，检测：${row.last_error || row.status}`)
       emit('saved')
+      return
+    }
+
+    if (sourceTab.value === 'upload') {
+      toast.warning('请先选择一个 .js 文件')
       return
     }
 
@@ -263,6 +255,7 @@ async function doCheck() {
     return
   }
   loading.value = true
+  progressText.value = '当前进度：准备检测…'
   try {
     if (scriptText.value && scriptText.value !== originalScript.value) {
       await $fetch(`/api/sources/${props.source.id}/script`, {
@@ -271,11 +264,18 @@ async function doCheck() {
       })
       originalScript.value = scriptText.value
     }
-    const res = await $fetch<{ items: Array<{ id: string; status: string; error?: string }> }>(
+    const done = await fetchSourceBatchNdjson(
       '/api/sources/check',
-      { method: 'POST', body: { ids: [props.source.id] } },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [props.source.id], stream: true }),
+      },
+      (text) => {
+        progressText.value = text
+      },
     )
-    const summary = summarizeSourceCheck(res.items || [])
+    const summary = summarizeSourceCheck(done.items || [])
     if (summary.level === 'success') toast.success(summary.message)
     else if (summary.level === 'warning') toast.warning(summary.message)
     else toast.error(summary.message)
@@ -284,6 +284,7 @@ async function doCheck() {
     toast.error(apiErrorMessage(e, '检测失败'))
   } finally {
     loading.value = false
+    progressText.value = ''
   }
 }
 </script>
@@ -362,33 +363,20 @@ async function doCheck() {
           @dragleave.prevent="dragOver = false"
           @drop="onDrop"
         >
-          <p class="muted">拖拽 .js 到此处，或选择文件 / 目录</p>
+          <p class="muted">拖拽单个 .js 到此处，或选择文件</p>
           <div class="actions">
-            <button class="btn btn-ghost" type="button" :disabled="loading" @click="pickFiles">
+            <button class="btn btn-ghost" type="button" :disabled="loading" @click="pickFile">
               选择文件
             </button>
-            <button class="btn btn-ghost" type="button" :disabled="loading" @click="pickDir">
-              选择目录
-            </button>
           </div>
-          <p v-if="pendingFiles.length" class="muted" style="margin-top: 8px">
-            已选 {{ pendingFiles.length }} 个文件
-            <template v-if="pendingFiles.length === 1">：{{ pendingFiles[0]?.name }}</template>
+          <p v-if="pendingFile" class="muted" style="margin-top: 8px">
+            已选：{{ pendingFile.name }}
           </p>
           <input
             ref="fileInput"
             type="file"
             accept=".js,text/javascript"
-            multiple
             hidden
-            @change="onFileChange"
-          />
-          <input
-            ref="dirInput"
-            type="file"
-            multiple
-            hidden
-            webkitdirectory
             @change="onFileChange"
           />
         </div>
@@ -421,6 +409,7 @@ async function doCheck() {
           </button>
           <button class="btn btn-ghost" type="button" :disabled="loading" @click="onCancel">取消</button>
         </div>
+        <p v-if="progressText" class="muted progress-line">{{ progressText }}</p>
       </div>
     </div>
   </Teleport>
@@ -486,5 +475,11 @@ async function doCheck() {
 .panel .actions {
   justify-content: center;
   margin-top: 8px;
+}
+.progress-line {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-all;
 }
 </style>

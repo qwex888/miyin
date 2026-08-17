@@ -11,6 +11,13 @@ import {
   type SourceRow,
 } from './sourceRegistry'
 import { allocateUniqueName, cleanSourceName } from './sourceImport'
+import type { SourceProgressReporter } from '#shared/sourceBatchProgress'
+import {
+  SOURCE_ITEM_TIMEOUT_MS,
+  createBatchDeadline,
+  reportProgress,
+  withTimeout,
+} from '../utils/sourceBatchTimeout'
 
 export const BUNDLE_VERSION = 1
 
@@ -221,26 +228,63 @@ export function previewSourcesBundle(zipBuffer: Buffer) {
 export async function applySourcesBundle(
   zipBuffer: Buffer,
   onConflict: 'overwrite' | 'skip',
+  opts?: { onProgress?: SourceProgressReporter },
 ): Promise<{
   total: number
   imported: number
   overwritten: number
   skipped: number
   failed: number
+  timedOut: boolean
   results: Array<Record<string, any>>
 }> {
   const items = parseSourcesBundle(zipBuffer)
+  const total = items.length
+  const deadline = createBatchDeadline(total)
   const results: Array<Record<string, any>> = []
   let imported = 0
   let overwritten = 0
   let skipped = 0
   let failed = 0
+  let timedOut = false
 
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const index = i + 1
+    const item = items[i]!
+
+    if (deadline.isExpired()) {
+      timedOut = true
+      for (let j = i; j < items.length; j++) {
+        const left = items[j]!
+        failed += 1
+        await reportProgress(opts?.onProgress, {
+          index: j + 1,
+          total,
+          name: left.name,
+          status: 'failed',
+          error: '整批超时',
+        })
+        results.push({
+          ok: false,
+          name: left.name,
+          url: left.url,
+          error: '整批超时',
+        })
+      }
+      break
+    }
+
     try {
       if (item.conflict) {
         if (onConflict === 'skip') {
           skipped += 1
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: item.name,
+            status: 'skipped',
+            error: `冲突已跳过（与「${item.conflict.existingName}」）`,
+          })
           results.push({
             ok: false,
             skipped: true,
@@ -251,50 +295,101 @@ export async function applySourcesBundle(
           continue
         }
 
-        // overwrite：写到已存在行的 id（url 冲突时用 existingId）
-        const targetId = item.conflict.existingId
-        const existing = getSource(targetId) as SourceRow
-        let name = item.name
-        const nameOwner = findSourceByName(name)
-        if (nameOwner && nameOwner.id !== targetId) {
-          const taken = new Set(listSources().map((s) => s.name))
-          name = allocateUniqueName(name, taken)
-        }
-        await saveSourceScript(targetId, { script: item.script, name })
-        if (typeof item.enabled === 'boolean' && (item.enabled ? 1 : 0) !== existing.enabled) {
-          updateSource(targetId, { enabled: item.enabled })
-        }
-        overwritten += 1
-        results.push({ ok: true, overwritten: true, id: targetId, name })
+        await withTimeout(
+          (async () => {
+            const targetId = item.conflict!.existingId
+            const existing = getSource(targetId) as SourceRow
+            let name = item.name
+            const nameOwner = findSourceByName(name)
+            if (nameOwner && nameOwner.id !== targetId) {
+              const taken = new Set(listSources().map((s) => s.name))
+              name = allocateUniqueName(name, taken)
+            }
+            await saveSourceScript(targetId, {
+              script: item.script,
+              name,
+              onPhase: async (status) => {
+                await reportProgress(opts?.onProgress, {
+                  index,
+                  total,
+                  name,
+                  status,
+                })
+              },
+            })
+            if (typeof item.enabled === 'boolean' && (item.enabled ? 1 : 0) !== existing.enabled) {
+              updateSource(targetId, { enabled: item.enabled })
+            }
+            overwritten += 1
+            results.push({ ok: true, overwritten: true, id: targetId, name })
+            await reportProgress(opts?.onProgress, {
+              index,
+              total,
+              name,
+              status: 'done',
+            })
+          })(),
+          SOURCE_ITEM_TIMEOUT_MS,
+          `音源「${item.name}」`,
+        )
         continue
       }
 
-      await addSourceFromScript({
-        id: item.id,
-        name: item.name,
-        url: item.url,
-        script: item.script,
-        enabled: item.enabled,
-      })
-      imported += 1
-      results.push({ ok: true, imported: true, id: item.id, name: item.name })
+      await withTimeout(
+        (async () => {
+          await addSourceFromScript({
+            id: item.id,
+            name: item.name,
+            url: item.url,
+            script: item.script,
+            enabled: item.enabled,
+            onPhase: async (status) => {
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: item.name,
+                status,
+              })
+            },
+          })
+          imported += 1
+          results.push({ ok: true, imported: true, id: item.id, name: item.name })
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: item.name,
+            status: 'done',
+          })
+        })(),
+        SOURCE_ITEM_TIMEOUT_MS,
+        `音源「${item.name}」`,
+      )
     } catch (err: any) {
       failed += 1
+      const message = err?.message || String(err)
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: item.name,
+        status: 'failed',
+        error: message,
+      })
       results.push({
         ok: false,
         name: item.name,
         url: item.url,
-        error: err?.message || String(err),
+        error: message,
       })
     }
   }
 
   return {
-    total: items.length,
+    total,
     imported,
     overwritten,
     skipped,
     failed,
+    timedOut,
     results,
   }
 }

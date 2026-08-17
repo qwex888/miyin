@@ -1,12 +1,28 @@
 export function usePlayer() {
   const current = useState<{ title: string; artist: string; url: string } | null>('player:current', () => null)
   const audio = useState<HTMLAudioElement | null>('player:audio', () => null)
+  const playing = useState<boolean>('player:playing', () => false)
+
+  function bindAudioEvents(el: HTMLAudioElement) {
+    if ((el as HTMLAudioElement & { __miyinBound?: boolean }).__miyinBound) return
+    ;(el as HTMLAudioElement & { __miyinBound?: boolean }).__miyinBound = true
+    el.addEventListener('play', () => {
+      playing.value = true
+    })
+    el.addEventListener('pause', () => {
+      playing.value = false
+    })
+    el.addEventListener('ended', () => {
+      playing.value = false
+    })
+  }
 
   function ensureAudio() {
     if (import.meta.server) return null
     if (!audio.value) {
       audio.value = new Audio()
     }
+    bindAudioEvents(audio.value)
     return audio.value
   }
 
@@ -29,5 +45,16 @@ export function usePlayer() {
     else el.pause()
   }
 
-  return { current, play, pause, toggle, audio }
+  function stop() {
+    const el = audio.value
+    if (el) {
+      el.pause()
+      el.removeAttribute('src')
+      el.load()
+    }
+    playing.value = false
+    current.value = null
+  }
+
+  return { current, playing, play, pause, toggle, stop, audio }
 }

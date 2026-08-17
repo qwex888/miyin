@@ -39,7 +39,8 @@ const typeLabel: Record<ToastType, string> = {
 <style scoped>
 .toast-host {
   position: fixed;
-  z-index: 10050;
+  /* 高于 Loading(200) 与各类弹窗，保证提示始终置顶 */
+  z-index: 10100;
   top: max(12px, env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);

@@ -8,6 +8,13 @@ import {
   loadLxSource,
   settleSourceNetworkErrors,
 } from './sourceRuntime'
+import type { SourceProgressReporter } from '#shared/sourceBatchProgress'
+import {
+  SOURCE_ITEM_TIMEOUT_MS,
+  createBatchDeadline,
+  reportProgress,
+  withTimeout,
+} from '../utils/sourceBatchTimeout'
 
 export type SourceRow = {
   id: string
@@ -111,6 +118,7 @@ async function persistSource(input: {
   url: string
   mirrorUrl?: string
   allowUpdate: boolean
+  onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
 }): Promise<SourceRow> {
   const id = idFromUrl(input.url)
   const existing = getSource(id)
@@ -118,10 +126,13 @@ async function persistSource(input: {
     throw createError({ statusCode: 409, statusMessage: '该音源 URL 已存在' })
   }
 
+  await input.onPhase?.('loading')
   const script = await fetchSourceScript(input.mirrorUrl || input.url)
+  await input.onPhase?.('configuring')
   const localPath = getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
 
+  await input.onPhase?.('checking')
   const probed = await probeLocalScript(localPath)
   const platforms = probed.platforms
   const status = probed.status
@@ -207,21 +218,55 @@ export async function upsertSourceFromRemote(input: { name: string; url: string;
  * - URL 全量精确匹配已存在或本批重复 → 自动跳过
  * - 名称冲突但 URL 不同 → 自动改名为「名称 (2)」…
  */
-export async function importSourcesText(text: string) {
+export async function importSourcesText(
+  text: string,
+  opts?: { onProgress?: SourceProgressReporter },
+) {
   const parsed = parseSourceText(text)
   if (!parsed.length) {
     throw createError({ statusCode: 400, statusMessage: '未解析到任何音源 URL' })
   }
 
+  const total = parsed.length
+  const deadline = createBatchDeadline(total)
   const takenNames = existingNameSet()
   const seenUrls = new Set(listSources().map((s) => s.url))
   const results: Array<Record<string, any>> = []
   let skipped = 0
   let renamed = 0
+  let failed = 0
+  let timedOut = false
 
-  for (const item of parsed) {
+  for (let i = 0; i < parsed.length; i++) {
+    const index = i + 1
+    const item = parsed[i]!
+
+    if (deadline.isExpired()) {
+      timedOut = true
+      for (let j = i; j < parsed.length; j++) {
+        const left = parsed[j]!
+        failed += 1
+        await reportProgress(opts?.onProgress, {
+          index: j + 1,
+          total,
+          name: left.name,
+          status: 'failed',
+          error: '整批超时',
+        })
+        results.push({ ok: false, name: left.name, url: left.url, error: '整批超时' })
+      }
+      break
+    }
+
     if (seenUrls.has(item.url)) {
       skipped += 1
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: item.name,
+        status: 'skipped',
+        error: 'URL 已存在，已跳过',
+      })
       results.push({
         ok: false,
         skipped: true,
@@ -236,28 +281,65 @@ export async function importSourcesText(text: string) {
     if (finalName !== item.name) renamed += 1
 
     try {
-      const row = await persistSource({
-        name: finalName,
-        url: item.url,
-        allowUpdate: false,
-      })
-      seenUrls.add(item.url)
-      takenNames.add(finalName)
-      results.push({
-        ok: true,
-        source: row,
-        renamed: finalName !== item.name ? finalName : undefined,
-      })
+      await withTimeout(
+        (async () => {
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: finalName,
+            status: 'loading',
+          })
+          const row = await persistSource({
+            name: finalName,
+            url: item.url,
+            allowUpdate: false,
+            onPhase: async (status) => {
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: finalName,
+                status,
+              })
+            },
+          })
+          seenUrls.add(item.url)
+          takenNames.add(finalName)
+          results.push({
+            ok: true,
+            source: row,
+            renamed: finalName !== item.name ? finalName : undefined,
+          })
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: finalName,
+            status: 'done',
+          })
+        })(),
+        SOURCE_ITEM_TIMEOUT_MS,
+        `音源「${finalName}」`,
+      )
     } catch (err: any) {
-      results.push({ ok: false, name: item.name, url: item.url, error: err?.message || String(err) })
+      failed += 1
+      const message = err?.message || String(err)
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: finalName,
+        status: 'failed',
+        error: message,
+      })
+      results.push({ ok: false, name: item.name, url: item.url, error: message })
     }
   }
 
   return {
-    total: parsed.length,
+    total,
     imported: results.filter((r) => r.ok).length,
     skipped,
     renamed,
+    failed,
+    timedOut,
     results,
   }
 }
@@ -298,8 +380,11 @@ export async function addSourceFromScript(input: {
   url?: string
   id?: string
   enabled?: boolean
+  /** 单个新增：名称冲突时自动改成「名称 (2)」…；默认报错 */
+  renameOnConflict?: boolean
+  onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
 }) {
-  const name = cleanSourceName(input.name)
+  let name = cleanSourceName(input.name)
   const script = String(input.script || '')
   if (!name || name === 'unnamed') {
     throw createError({ statusCode: 400, statusMessage: '名称必填' })
@@ -307,6 +392,8 @@ export async function addSourceFromScript(input: {
   if (!script || script.trim().length < 20) {
     throw createError({ statusCode: 400, statusMessage: '脚本内容过短' })
   }
+
+  await input.onPhase?.('loading')
 
   let url = (input.url || '').trim()
   let id = (input.id || '').trim()
@@ -328,11 +415,17 @@ export async function addSourceFromScript(input: {
     throw createError({ statusCode: 409, statusMessage: '音源 ID 已存在' })
   }
   if (findSourceByName(name)) {
-    throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+    if (input.renameOnConflict) {
+      name = allocateUniqueName(name, existingNameSet())
+    } else {
+      throw createError({ statusCode: 409, statusMessage: `音源名称「${name}」已存在，请修改名称后重试` })
+    }
   }
 
+  await input.onPhase?.('configuring')
   const localPath = getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
+  await input.onPhase?.('checking')
   const probed = await probeLocalScript(localPath)
   const ts = nowIso()
   const enabled = input.enabled === false ? 0 : 1
@@ -361,7 +454,11 @@ export async function addSourceFromScript(input: {
 /** 保存脚本（可同时改名）；覆盖本地文件并重载检测 */
 export async function saveSourceScript(
   id: string,
-  input: { script: string; name?: string },
+  input: {
+    script: string
+    name?: string
+    onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
+  },
 ): Promise<SourceRow> {
   const row = getSource(id)
   if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
@@ -369,6 +466,8 @@ export async function saveSourceScript(
   if (!script || script.trim().length < 20) {
     throw createError({ statusCode: 400, statusMessage: '脚本内容过短' })
   }
+
+  await input.onPhase?.('loading')
 
   let name = row.name
   if (input.name !== undefined) {
@@ -381,8 +480,10 @@ export async function saveSourceScript(
     }
   }
 
+  await input.onPhase?.('configuring')
   const localPath = row.local_path || getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
+  await input.onPhase?.('checking')
   const probed = await probeLocalScript(localPath)
   const ts = nowIso()
   getDb()
@@ -419,47 +520,251 @@ export async function refreshSourceScriptFromUrl(id: string): Promise<SourceRow>
   })
 }
 
-/**
- * 批量上传多个脚本文件。返回逐条结果。
- */
-export async function addSourcesFromFiles(
-  files: Array<{ name: string; script: string }>,
-): Promise<{
-  total: number
-  imported: number
-  renamed: number
-  results: Array<Record<string, any>>
-}> {
+export type FileUploadConflict = {
+  id: string
+  name: string
+  url: string
+  existingId: string
+  existingName: string
+  reason: 'name'
+}
+
+type FileUploadItem = {
+  name: string
+  script: string
+  conflict?: FileUploadConflict
+}
+
+function normalizeUploadFileName(raw: string) {
+  return cleanSourceName(String(raw || '').replace(/\.js$/i, ''))
+}
+
+function buildFileUploadItems(files: Array<{ name: string; script: string }>): FileUploadItem[] {
   if (!files.length) {
     throw createError({ statusCode: 400, statusMessage: '未提供任何脚本文件' })
   }
-  const takenNames = existingNameSet()
-  const results: Array<Record<string, any>> = []
-  let renamed = 0
+
+  const items: FileUploadItem[] = []
+  const batchFirst = new Map<string, { name: string }>()
 
   for (const file of files) {
-    const base = cleanSourceName(file.name.replace(/\.js$/i, ''))
-    const finalName = allocateUniqueName(base, takenNames)
-    if (finalName !== base) renamed += 1
+    const name = normalizeUploadFileName(file.name)
+    if (!name || name === 'unnamed') continue
+    const script = String(file.script || '')
+    if (script.trim().length < 20) continue
+
+    let conflict: FileUploadConflict | undefined
+    const existing = findSourceByName(name)
+    if (existing) {
+      conflict = {
+        id: name,
+        name,
+        url: existing.url || '',
+        existingId: existing.id,
+        existingName: existing.name,
+        reason: 'name',
+      }
+    } else {
+      const first = batchFirst.get(name)
+      if (first) {
+        conflict = {
+          id: name,
+          name,
+          url: '',
+          existingId: '',
+          existingName: first.name,
+          reason: 'name',
+        }
+      } else {
+        batchFirst.set(name, { name })
+      }
+    }
+
+    items.push({ name, script, conflict })
+  }
+
+  if (!items.length) {
+    throw createError({ statusCode: 400, statusMessage: '未找到可用的 .js 音源文件' })
+  }
+  return items
+}
+
+/** 批量上传预览：按文件名（去 .js）检测同名冲突 */
+export function previewSourcesFromFiles(files: Array<{ name: string; script: string }>) {
+  const items = buildFileUploadItems(files)
+  const conflicts = items.filter((i) => i.conflict).map((i) => i.conflict!)
+  return {
+    dryRun: true,
+    total: items.length,
+    newCount: items.length - conflicts.length,
+    conflictCount: conflicts.length,
+    conflicts,
+  }
+}
+
+/**
+ * 批量上传：同名冲突按 overwrite / skip 处理（不再自动改名）。
+ */
+export async function applySourcesFromFiles(
+  files: Array<{ name: string; script: string }>,
+  onConflict: 'overwrite' | 'skip',
+  opts?: { onProgress?: SourceProgressReporter },
+): Promise<{
+  total: number
+  imported: number
+  overwritten: number
+  skipped: number
+  failed: number
+  timedOut: boolean
+  results: Array<Record<string, any>>
+}> {
+  const items = buildFileUploadItems(files)
+  const total = items.length
+  const deadline = createBatchDeadline(total)
+  const results: Array<Record<string, any>> = []
+  let imported = 0
+  let overwritten = 0
+  let skipped = 0
+  let failed = 0
+  let timedOut = false
+
+  for (let i = 0; i < items.length; i++) {
+    const index = i + 1
+    const item = items[i]!
+
+    if (deadline.isExpired()) {
+      timedOut = true
+      for (let j = i; j < items.length; j++) {
+        const left = items[j]!
+        failed += 1
+        await reportProgress(opts?.onProgress, {
+          index: j + 1,
+          total,
+          name: left.name,
+          status: 'failed',
+          error: '整批超时',
+        })
+        results.push({ ok: false, name: left.name, error: '整批超时' })
+      }
+      break
+    }
+
     try {
-      const row = await addSourceFromScript({ name: finalName, script: file.script })
-      takenNames.add(finalName)
-      results.push({
-        ok: true,
-        source: row,
-        renamed: finalName !== base ? finalName : undefined,
-      })
+      if (item.conflict) {
+        if (onConflict === 'skip') {
+          skipped += 1
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: item.name,
+            status: 'skipped',
+            error: `冲突已跳过（与「${item.conflict.existingName}」）`,
+          })
+          results.push({
+            ok: false,
+            skipped: true,
+            name: item.name,
+            error: `冲突已跳过（与「${item.conflict.existingName}」）`,
+          })
+          continue
+        }
+
+        await withTimeout(
+          (async () => {
+            const existing = item.conflict!.existingId
+              ? getSource(item.conflict!.existingId)
+              : findSourceByName(item.name)
+            if (!existing) {
+              const row = await addSourceFromScript({
+                name: item.name,
+                script: item.script,
+                onPhase: async (status) => {
+                  await reportProgress(opts?.onProgress, {
+                    index,
+                    total,
+                    name: item.name,
+                    status,
+                  })
+                },
+              })
+              imported += 1
+              results.push({ ok: true, source: row })
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: item.name,
+                status: 'done',
+              })
+              return
+            }
+            await saveSourceScript(existing.id, {
+              script: item.script,
+              name: item.name,
+              onPhase: async (status) => {
+                await reportProgress(opts?.onProgress, {
+                  index,
+                  total,
+                  name: item.name,
+                  status,
+                })
+              },
+            })
+            overwritten += 1
+            results.push({ ok: true, overwritten: true, id: existing.id, name: item.name })
+            await reportProgress(opts?.onProgress, {
+              index,
+              total,
+              name: item.name,
+              status: 'done',
+            })
+          })(),
+          SOURCE_ITEM_TIMEOUT_MS,
+          `音源「${item.name}」`,
+        )
+        continue
+      }
+
+      await withTimeout(
+        (async () => {
+          const row = await addSourceFromScript({
+            name: item.name,
+            script: item.script,
+            onPhase: async (status) => {
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: item.name,
+                status,
+              })
+            },
+          })
+          imported += 1
+          results.push({ ok: true, source: row })
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: item.name,
+            status: 'done',
+          })
+        })(),
+        SOURCE_ITEM_TIMEOUT_MS,
+        `音源「${item.name}」`,
+      )
     } catch (err: any) {
-      results.push({ ok: false, name: base, error: err?.message || String(err) })
+      failed += 1
+      const message = err?.message || String(err)
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: item.name,
+        status: 'failed',
+        error: message,
+      })
+      results.push({ ok: false, name: item.name, error: message })
     }
   }
 
-  return {
-    total: files.length,
-    imported: results.filter((r) => r.ok).length,
-    renamed,
-    results,
-  }
+  return { total, imported, overwritten, skipped, failed, timedOut, results }
 }
 
 export function deleteSource(id: string) {
@@ -476,57 +781,198 @@ export function deleteSource(id: string) {
   return { ok: true }
 }
 
-export async function checkSources(ids?: string[]) {
+export async function checkSources(
+  ids?: string[],
+  opts?: { onProgress?: SourceProgressReporter },
+) {
   const rows = ids?.length
     ? (ids.map((id) => getSource(id)).filter(Boolean) as SourceRow[])
     : listSources()
+  const total = rows.length
+  const deadline = createBatchDeadline(total)
   const out = []
-  for (const row of rows) {
-    const ts = nowIso()
-    const guard = acquireSourceRejectionGuard()
-    try {
-      if (!row.local_path || !existsSync(row.local_path)) {
-        await upsertSourceFromRemote({ name: row.name, url: row.url, mirrorUrl: row.mirror_url || undefined })
-        // upsert 已写入 status；再读一次供返回
-        const latest = getSource(row.id)
-        out.push({ id: row.id, status: latest?.status || 'unknown', error: latest?.last_error || undefined })
-      } else {
-        const handle = await loadLxSource(row.local_path, { bypassCache: true })
-        const netErrs = await settleSourceNetworkErrors(guard)
-        if (netErrs.length) {
-          const msg = `更新检测失败: ${netErrs[0]!.message}`
-          getDb()
-            .prepare(
-              `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
-            )
-            .run('dead', JSON.stringify(handle.platforms), ts, msg, ts, row.id)
-          out.push({ id: row.id, status: 'dead', error: msg })
-        } else {
-          getDb()
-            .prepare(
-              `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
-            )
-            .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
-          out.push({ id: row.id, status: 'ok' })
-        }
+  let timedOut = false
+
+  for (let i = 0; i < rows.length; i++) {
+    const index = i + 1
+    const row = rows[i]!
+
+    if (deadline.isExpired()) {
+      timedOut = true
+      for (let j = i; j < rows.length; j++) {
+        const left = rows[j]!
+        await reportProgress(opts?.onProgress, {
+          index: j + 1,
+          total,
+          name: left.name,
+          status: 'failed',
+          error: '整批超时',
+        })
+        out.push({ id: left.id, status: 'dead', error: '整批超时' })
       }
+      break
+    }
+
+    try {
+      await withTimeout(
+        (async () => {
+          const ts = nowIso()
+          const guard = acquireSourceRejectionGuard()
+          try {
+            if (!row.local_path || !existsSync(row.local_path)) {
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: row.name,
+                status: 'loading',
+              })
+              await upsertSourceFromRemote({
+                name: row.name,
+                url: row.url,
+                mirrorUrl: row.mirror_url || undefined,
+              })
+              const latest = getSource(row.id)
+              out.push({
+                id: row.id,
+                status: latest?.status || 'unknown',
+                error: latest?.last_error || undefined,
+              })
+            } else {
+              await reportProgress(opts?.onProgress, {
+                index,
+                total,
+                name: row.name,
+                status: 'checking',
+              })
+              const handle = await loadLxSource(row.local_path, { bypassCache: true })
+              const netErrs = await settleSourceNetworkErrors(guard)
+              if (netErrs.length) {
+                const msg = `更新检测失败: ${netErrs[0]!.message}`
+                getDb()
+                  .prepare(
+                    `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+                  )
+                  .run('dead', JSON.stringify(handle.platforms), ts, msg, ts, row.id)
+                out.push({ id: row.id, status: 'dead', error: msg })
+              } else {
+                getDb()
+                  .prepare(
+                    `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+                  )
+                  .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
+                out.push({ id: row.id, status: 'ok' })
+              }
+            }
+            await reportProgress(opts?.onProgress, {
+              index,
+              total,
+              name: row.name,
+              status: 'done',
+            })
+          } finally {
+            guard.release()
+          }
+        })(),
+        SOURCE_ITEM_TIMEOUT_MS,
+        `音源「${row.name}」`,
+      )
     } catch (err: any) {
+      const ts = nowIso()
+      const message = err?.message || String(err)
       getDb()
         .prepare(`UPDATE sources SET status=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`)
-        .run('dead', ts, err?.message || String(err), ts, row.id)
-      out.push({ id: row.id, status: 'dead', error: err?.message || String(err) })
-    } finally {
-      guard.release()
+        .run('dead', ts, message, ts, row.id)
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: row.name,
+        status: 'failed',
+        error: message,
+      })
+      out.push({ id: row.id, status: 'dead', error: message })
     }
   }
-  return out
+
+  return { items: out, timedOut, total }
 }
 
-export function cleanupDeadSources(dryRun = false) {
+export async function cleanupDeadSources(
+  dryRun = false,
+  opts?: { onProgress?: SourceProgressReporter },
+) {
   const dead = getDb().prepare(`SELECT * FROM sources WHERE status = 'dead'`).all() as SourceRow[]
-  if (dryRun) return { dryRun: true, count: dead.length, items: dead }
-  for (const row of dead) deleteSource(row.id)
-  return { dryRun: false, count: dead.length, items: dead }
+  if (dryRun) return { dryRun: true, count: dead.length, items: dead, deleted: 0, timedOut: false }
+
+  const total = dead.length
+  const deadline = createBatchDeadline(total)
+  const deletedItems: SourceRow[] = []
+  let timedOut = false
+
+  for (let i = 0; i < dead.length; i++) {
+    const index = i + 1
+    const row = dead[i]!
+
+    if (deadline.isExpired()) {
+      timedOut = true
+      for (let j = i; j < dead.length; j++) {
+        const left = dead[j]!
+        await reportProgress(opts?.onProgress, {
+          index: j + 1,
+          total,
+          name: left.name,
+          status: 'failed',
+          error: '整批超时',
+        })
+      }
+      break
+    }
+
+    try {
+      await withTimeout(
+        (async () => {
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: row.name,
+            status: 'loading',
+          })
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: row.name,
+            status: 'configuring',
+          })
+          deleteSource(row.id)
+          deletedItems.push(row)
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: row.name,
+            status: 'done',
+          })
+        })(),
+        SOURCE_ITEM_TIMEOUT_MS,
+        `音源「${row.name}」`,
+      )
+    } catch (err: any) {
+      await reportProgress(opts?.onProgress, {
+        index,
+        total,
+        name: row.name,
+        status: 'failed',
+        error: err?.message || String(err),
+      })
+    }
+  }
+
+  return {
+    dryRun: false,
+    count: deletedItems.length,
+    deleted: deletedItems.length,
+    items: deletedItems,
+    timedOut,
+    total,
+  }
 }
 
 export function listEnabledOkSources(platform?: string) {

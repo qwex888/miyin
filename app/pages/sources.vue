@@ -33,8 +33,20 @@ const conflictPreview = ref<{
   newCount: number
   conflicts: ImportConflict[]
 } | null>(null)
+const conflictKind = ref<'bundle' | 'files'>('bundle')
 const pendingBundleFile = ref<File | null>(null)
+const pendingDirFiles = ref<File[]>([])
 const bundleInput = ref<HTMLInputElement | null>(null)
+const dirInput = ref<HTMLInputElement | null>(null)
+
+const conflictDescription = computed(() => {
+  const preview = conflictPreview.value
+  if (!preview) return ''
+  if (conflictKind.value === 'files') {
+    return `目录中有 ${preview.conflictCount} 个与现有音源同名，另有 ${preview.newCount} 个可直接新增。音源名称取自 JS 文件名。请选择对冲突项的处理方式：`
+  }
+  return `完整包中有 ${preview.conflictCount} 个与现有音源冲突（同 ID 或同 URL），另有 ${preview.newCount} 个可直接新增。请选择对冲突项的处理方式：`
+})
 
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
@@ -86,26 +98,30 @@ function openEdit(s: Source) {
 }
 
 async function doImport() {
-  loadingText.value = '导入中…'
+  loadingText.value = '当前进度：准备导入…'
   loading.value = true
   try {
-    const res = await $fetch<{
-      total: number
-      imported?: number
-      skipped?: number
-      renamed?: number
-      results: any[]
-    }>('/api/sources/import', {
-      method: 'POST',
-      body: { text: importText.value },
-    })
-    const ok = res.imported ?? res.results.filter((r) => r.ok).length
-    const skipped = res.skipped ?? 0
-    const renamed = res.renamed ?? 0
+    const done = await fetchSourceBatchNdjson(
+      '/api/sources/import',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: importText.value, stream: true }),
+      },
+      (text) => {
+        loadingText.value = text
+      },
+    )
+    const ok = done.imported ?? 0
+    const skipped = done.skipped ?? 0
+    const renamed = done.renamed ?? 0
+    const failed = done.failed ?? 0
     const text =
-      `导入完成：成功 ${ok}/${res.total}` +
+      `导入完成：成功 ${ok}/${done.total}` +
       (skipped ? `，跳过 ${skipped}` : '') +
-      (renamed ? `，改名 ${renamed}` : '')
+      (renamed ? `，改名 ${renamed}` : '') +
+      (failed ? `，失败 ${failed}` : '') +
+      (done.timedOut ? '（整批超时）' : '')
     if (ok > 0) toast.success(text)
     else toast.warning(text)
     showImport.value = false
@@ -120,18 +136,26 @@ async function doImport() {
 
 async function checkAll() {
   moreOpen.value = false
-  loadingText.value = '检测中…'
+  loadingText.value = '当前进度：准备检测…'
   loading.value = true
   try {
-    const res = await $fetch<{ items: Array<{ id: string; status: string; error?: string }> }>(
+    const done = await fetchSourceBatchNdjson(
       '/api/sources/check',
-      { method: 'POST', body: {} },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stream: true }),
+      },
+      (text) => {
+        loadingText.value = text
+      },
     )
     await load({ silent: true })
-    const summary = summarizeSourceCheck(res.items || [])
-    if (summary.level === 'success') toast.success(summary.message)
-    else if (summary.level === 'warning') toast.warning(summary.message)
-    else toast.error(summary.message)
+    const summary = summarizeSourceCheck(done.items || [])
+    const msg = done.timedOut ? `${summary.message}（整批超时）` : summary.message
+    if (summary.level === 'success') toast.success(msg)
+    else if (summary.level === 'warning') toast.warning(msg)
+    else toast.error(msg)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '检测失败'))
   } finally {
@@ -142,12 +166,25 @@ async function checkAll() {
 async function cleanup() {
   moreOpen.value = false
   if (!confirm('确认清理所有失效音源？此操作不可撤销。')) return
-  loadingText.value = '清理中…'
+  loadingText.value = '当前进度：准备清理…'
   loading.value = true
   try {
-    await $fetch('/api/sources/cleanup', { method: 'POST', body: { dryRun: false } })
+    const done = await fetchSourceBatchNdjson(
+      '/api/sources/cleanup',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false, stream: true }),
+      },
+      (text) => {
+        loadingText.value = text
+      },
+    )
     await load({ silent: true })
-    toast.success('已清理失效音源')
+    const n = done.deleted ?? 0
+    const text = `已清理 ${n} 个失效音源` + (done.timedOut ? '（整批超时）' : '')
+    if (n > 0) toast.success(text)
+    else toast.info(text)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '清理失败'))
   } finally {
@@ -226,12 +263,25 @@ function pickBundle() {
   bundleInput.value?.click()
 }
 
+function pickDir() {
+  moreOpen.value = false
+  dirInput.value?.click()
+}
+
+function collectJsFromDir(list: FileList | null): File[] {
+  if (!list?.length) return []
+  // webkitdirectory 会递归带上子目录中的文件；按 basename 过滤 .js
+  return [...list].filter((f) => /\.js$/i.test(f.name))
+}
+
 async function onBundleSelected(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
   pendingBundleFile.value = file
+  pendingDirFiles.value = []
+  conflictKind.value = 'bundle'
   loadingText.value = '解析完整包…'
   loading.value = true
   try {
@@ -264,32 +314,77 @@ async function onBundleSelected(e: Event) {
   }
 }
 
+async function onDirSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = collectJsFromDir(input.files)
+  input.value = ''
+  if (!files.length) {
+    toast.warning('所选目录中未找到 .js 音源文件')
+    return
+  }
+  pendingDirFiles.value = files
+  pendingBundleFile.value = null
+  conflictKind.value = 'files'
+  loadingText.value = '解析目录脚本…'
+  loading.value = true
+  try {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f, f.name)
+    fd.append('dryRun', 'true')
+    const preview = await $fetch<{
+      conflictCount: number
+      newCount: number
+      conflicts: ImportConflict[]
+      total: number
+    }>('/api/sources/upload', { method: 'POST', body: fd })
+
+    if (preview.conflictCount > 0) {
+      conflictPreview.value = {
+        conflictCount: preview.conflictCount,
+        newCount: preview.newCount,
+        conflicts: preview.conflicts || [],
+      }
+      showConflict.value = true
+      return
+    }
+
+    await applyDirFiles('skip')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导入目录失败'))
+    pendingDirFiles.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
 async function applyBundle(onConflict: 'overwrite' | 'skip') {
   const file = pendingBundleFile.value
   if (!file) return
   conflictLoading.value = true
-  loadingText.value = '导入完整包…'
+  loadingText.value = '当前进度：准备导入完整包…'
   loading.value = true
   try {
     const fd = new FormData()
     fd.append('file', file, file.name)
     fd.append('onConflict', onConflict)
-    const res = await $fetch<{
-      imported: number
-      overwritten: number
-      skipped: number
-      failed: number
-      total: number
-    }>('/api/sources/import-bundle', { method: 'POST', body: fd })
+    fd.append('stream', 'true')
+    const done = await fetchSourceBatchNdjson(
+      '/api/sources/import-bundle',
+      { method: 'POST', body: fd },
+      (text) => {
+        loadingText.value = text
+      },
+    )
     showConflict.value = false
     pendingBundleFile.value = null
     conflictPreview.value = null
     const text =
-      `导入完成：新增 ${res.imported}` +
-      (res.overwritten ? `，覆盖 ${res.overwritten}` : '') +
-      (res.skipped ? `，跳过 ${res.skipped}` : '') +
-      (res.failed ? `，失败 ${res.failed}` : '')
-    if (res.imported + res.overwritten > 0) toast.success(text)
+      `导入完成：新增 ${done.imported ?? 0}` +
+      (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
+      (done.skipped ? `，跳过 ${done.skipped}` : '') +
+      (done.failed ? `，失败 ${done.failed}` : '') +
+      (done.timedOut ? '（整批超时）' : '')
+    if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
     else toast.warning(text)
     await load({ silent: true })
   } catch (e: unknown) {
@@ -300,8 +395,52 @@ async function applyBundle(onConflict: 'overwrite' | 'skip') {
   }
 }
 
+async function applyDirFiles(onConflict: 'overwrite' | 'skip') {
+  const files = pendingDirFiles.value
+  if (!files.length) return
+  conflictLoading.value = true
+  loadingText.value = '当前进度：准备导入目录…'
+  loading.value = true
+  try {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f, f.name)
+    fd.append('onConflict', onConflict)
+    fd.append('stream', 'true')
+    const done = await fetchSourceBatchNdjson(
+      '/api/sources/upload',
+      { method: 'POST', body: fd },
+      (text) => {
+        loadingText.value = text
+      },
+    )
+    showConflict.value = false
+    pendingDirFiles.value = []
+    conflictPreview.value = null
+    const text =
+      `导入完成：新增 ${done.imported ?? 0}` +
+      (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
+      (done.skipped ? `，跳过 ${done.skipped}` : '') +
+      (done.failed ? `，失败 ${done.failed}` : '') +
+      (done.timedOut ? '（整批超时）' : '')
+    if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
+    else toast.warning(text)
+    await load({ silent: true })
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '导入目录失败'))
+  } finally {
+    conflictLoading.value = false
+    loading.value = false
+  }
+}
+
+function onConflictResolve(action: 'overwrite' | 'skip') {
+  if (conflictKind.value === 'files') void applyDirFiles(action)
+  else void applyBundle(action)
+}
+
 function onConflictCancel() {
   pendingBundleFile.value = null
+  pendingDirFiles.value = []
   conflictPreview.value = null
 }
 
@@ -353,7 +492,7 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page-sources">
     <PageLoading :show="showPageLoading" :text="loadingText" />
     <div class="toolbar">
       <div class="title">
@@ -383,6 +522,7 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
             <button type="button" role="menuitem" @click="showImport = true; moreOpen = false">
               批量导入（文本）
             </button>
+            <button type="button" role="menuitem" @click="pickDir">批量导入目录（JS）</button>
             <button type="button" role="menuitem" @click="pickBundle">导入完整包</button>
             <button type="button" role="menuitem" :disabled="loading" @click="exportBundle">
               导出完整包{{ selectedCount ? `（选中 ${selectedCount}）` : '' }}
@@ -404,8 +544,16 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
       hidden
       @change="onBundleSelected"
     />
+    <input
+      ref="dirInput"
+      type="file"
+      multiple
+      hidden
+      webkitdirectory
+      @change="onDirSelected"
+    />
 
-    <div class="card">
+    <div class="card list-card">
       <table class="table">
         <thead>
           <tr>
@@ -491,8 +639,9 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
       :conflict-count="conflictPreview?.conflictCount || 0"
       :new-count="conflictPreview?.newCount || 0"
       :conflicts="conflictPreview?.conflicts || []"
+      :description="conflictDescription"
       :loading="conflictLoading"
-      @resolve="applyBundle"
+      @resolve="onConflictResolve"
       @cancel="onConflictCancel"
     />
 
@@ -516,6 +665,15 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
 </template>
 
 <style scoped>
+.page-sources {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -523,6 +681,13 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
   gap: 12px;
   margin-bottom: 12px;
   flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.list-card {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .toolbar h2 {
   margin: 0;
