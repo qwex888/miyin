@@ -1,5 +1,5 @@
 appname=miyin
-version=0.4.1
+version=0.4.2
 display_name=觅音
 desc=多源音乐搜索、试听与下载助手（洛雪音源兼容）。支持 wy / tx / kg 歌单导入。
 platform=all

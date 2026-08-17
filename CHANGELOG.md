@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-17
+
 ### Added
 
 - 音源「更多 → 批量导入目录（JS）」：递归导入目录内全部 `.js`，名称取文件名；同名冲突可选择覆盖或跳过
@@ -124,7 +126,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/qwex888/miyin/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/qwex888/miyin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qwex888/miyin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qwex888/miyin/compare/v0.2.1...v0.3.0
