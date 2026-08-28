@@ -14,7 +14,7 @@
     "release": "bash scripts/release.sh"
   },
   "dependencies": {
-    "@tanstack/vue-virtual": "^3.13.35",
+    "@tanstack/vue-virtual": "^3.13.36",
     "@trimjs/web-app": "^0.4.2",
     "better-sqlite3": "^13.0.3",
     "fflate": "^0.8.3",
