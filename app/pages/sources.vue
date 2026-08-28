@@ -202,6 +202,33 @@ async function toggle(s: Source) {
   }
 }
 
+const enabledDeadCount = computed(
+  () => items.value.filter((s) => s.status === 'dead' && s.enabled === 1).length,
+)
+
+async function disableAllDead() {
+  moreOpen.value = false
+  const n = enabledDeadCount.value
+  if (!n) {
+    toast.info('当前没有仍启用的异常音源')
+    return
+  }
+  if (!confirm(`确认停用 ${n} 个异常音源？不会删除记录，仅停止参与取链。`)) return
+  loadingText.value = '停用异常音源中…'
+  loading.value = true
+  try {
+    const res = await $fetch<{ disabled: number }>('/api/sources/disable-dead', { method: 'POST' })
+    await load({ silent: true })
+    const count = res.disabled ?? 0
+    if (count > 0) toast.success(`已停用 ${count} 个异常音源`)
+    else toast.info('当前没有仍启用的异常音源')
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '停用失败'))
+  } finally {
+    loading.value = false
+  }
+}
+
 async function remove(s: Source) {
   if (!confirm(`确认删除音源「${s.name}」？此操作不可撤销。`)) return
   try {
@@ -530,6 +557,14 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
             <hr />
             <button type="button" role="menuitem" :disabled="loading" @click="checkAll">
               检测全部
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              :disabled="loading || !enabledDeadCount"
+              @click="disableAllDead"
+            >
+              停用所有异常{{ enabledDeadCount ? `（${enabledDeadCount}）` : '' }}
             </button>
             <button type="button" role="menuitem" @click="cleanup">清理失效</button>
           </div>

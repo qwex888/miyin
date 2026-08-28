@@ -329,6 +329,39 @@ export function updateSource(id: string, patch: { enabled?: boolean; name?: stri
   return getSource(id)!
 }
 
+/** 仍启用的异常（status=dead）音源 */
+export function listEnabledDeadSources(): SourceRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM sources WHERE status = 'dead' AND enabled = 1 ORDER BY created_at DESC`)
+    .all() as SourceRow[]
+}
+
+/**
+ * 一键停用所有异常音源（status=dead 且仍启用）。
+ * 不删除脚本与记录，仅把 enabled 置 0。
+ */
+export function disableDeadSources(): {
+  disabled: number
+  ids: string[]
+  names: string[]
+} {
+  const rows = listEnabledDeadSources()
+  if (!rows.length) return { disabled: 0, ids: [], names: [] }
+  const ts = nowIso()
+  const stmt = getDb().prepare('UPDATE sources SET enabled = 0, updated_at = ? WHERE id = ?')
+  const ids: string[] = []
+  const names: string[] = []
+  const tx = getDb().transaction((list: SourceRow[]) => {
+    for (const row of list) {
+      stmt.run(ts, row.id)
+      ids.push(row.id)
+      names.push(row.name)
+    }
+  })
+  tx(rows)
+  return { disabled: ids.length, ids, names }
+}
+
 export function readSourceScript(id: string): string {
   const row = getSource(id)
   if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
