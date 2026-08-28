@@ -3,11 +3,7 @@ import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs'
 import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
 import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceImport'
-import {
-  acquireSourceRejectionGuard,
-  loadLxSource,
-  settleSourceNetworkErrors,
-} from './sourceRuntime'
+import { probeLocalScript } from './sourceProbe'
 import type { SourceProgressReporter } from '#shared/sourceBatchProgress'
 import {
   SOURCE_ITEM_TIMEOUT_MS,
@@ -45,34 +41,6 @@ function newLocalId() {
 
 function isHttpUrl(url: string) {
   return /^https?:\/\//i.test(url.trim())
-}
-
-async function probeLocalScript(localPath: string): Promise<{
-  platforms: string[]
-  status: string
-  lastError: string | null
-}> {
-  let platforms: string[] = []
-  let status = 'unknown'
-  let lastError: string | null = null
-  const guard = acquireSourceRejectionGuard()
-  try {
-    const handle = await loadLxSource(localPath, { bypassCache: true })
-    platforms = handle.platforms
-    const netErrs = await settleSourceNetworkErrors(guard)
-    if (netErrs.length) {
-      status = 'dead'
-      lastError = `更新检测失败: ${netErrs[0]!.message}`
-    } else {
-      status = 'ok'
-    }
-  } catch (err: any) {
-    status = 'dead'
-    lastError = err?.message || String(err)
-  } finally {
-    guard.release()
-  }
-  return { platforms, status, lastError }
 }
 
 export function listSources(): SourceRow[] {
@@ -817,61 +785,56 @@ export async function checkSources(
       await withTimeout(
         (async () => {
           const ts = nowIso()
-          const guard = acquireSourceRejectionGuard()
-          try {
-            if (!row.local_path || !existsSync(row.local_path)) {
-              await reportProgress(opts?.onProgress, {
-                index,
-                total,
-                name: row.name,
-                status: 'loading',
-              })
-              await upsertSourceFromRemote({
-                name: row.name,
-                url: row.url,
-                mirrorUrl: row.mirror_url || undefined,
-              })
-              const latest = getSource(row.id)
-              out.push({
-                id: row.id,
-                status: latest?.status || 'unknown',
-                error: latest?.last_error || undefined,
-              })
-            } else {
-              await reportProgress(opts?.onProgress, {
-                index,
-                total,
-                name: row.name,
-                status: 'checking',
-              })
-              const handle = await loadLxSource(row.local_path, { bypassCache: true })
-              const netErrs = await settleSourceNetworkErrors(guard)
-              if (netErrs.length) {
-                const msg = `更新检测失败: ${netErrs[0]!.message}`
-                getDb()
-                  .prepare(
-                    `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
-                  )
-                  .run('dead', JSON.stringify(handle.platforms), ts, msg, ts, row.id)
-                out.push({ id: row.id, status: 'dead', error: msg })
-              } else {
-                getDb()
-                  .prepare(
-                    `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
-                  )
-                  .run('ok', JSON.stringify(handle.platforms), ts, null, ts, row.id)
-                out.push({ id: row.id, status: 'ok' })
-              }
-            }
+          if (!row.local_path || !existsSync(row.local_path)) {
             await reportProgress(opts?.onProgress, {
               index,
               total,
               name: row.name,
-              status: 'done',
+              status: 'loading',
             })
-          } finally {
-            guard.release()
+            await upsertSourceFromRemote({
+              name: row.name,
+              url: row.url,
+              mirrorUrl: row.mirror_url || undefined,
+            })
+            const latest = getSource(row.id)
+            out.push({
+              id: row.id,
+              status: latest?.status || 'unknown',
+              error: latest?.last_error || undefined,
+            })
+          } else {
+            await reportProgress(opts?.onProgress, {
+              index,
+              total,
+              name: row.name,
+              status: 'checking',
+            })
+            const probed = await probeLocalScript(row.local_path)
+            getDb()
+              .prepare(
+                `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+              )
+              .run(
+                probed.status,
+                JSON.stringify(probed.platforms),
+                ts,
+                probed.lastError,
+                ts,
+                row.id,
+              )
+            if (probed.status === 'dead') {
+              out.push({ id: row.id, status: 'dead', error: probed.lastError || undefined })
+            } else {
+              out.push({ id: row.id, status: 'ok' })
+            }
           }
+          await reportProgress(opts?.onProgress, {
+            index,
+            total,
+            name: row.name,
+            status: 'done',
+          })
         })(),
         SOURCE_ITEM_TIMEOUT_MS,
         `音源「${row.name}」`,

@@ -17,6 +17,8 @@ export type LxSourceHandle = {
   getMusicUrl: (platform: string, musicInfo: Record<string, any>, quality: string) => Promise<string>
   dispose: () => void
   sourceKey: string
+  /** 脚本 checkUpdate / updateAlert 推送的提示（如版本过旧） */
+  updateAlerts: string[]
 }
 
 const LOAD_TIMEOUT_MS = Number(process.env.MIYIN_SOURCE_LOAD_TIMEOUT_MS || 5000)
@@ -437,6 +439,7 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
   }
 
   const handlers: Array<(payload: any) => any> = []
+  const updateAlerts: string[] = []
   let platforms: string[] = []
   let qualityMap: Record<string, string[]> = {}
   let disposed = false
@@ -529,9 +532,11 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
         }
         resolveInit?.()
       }
-      // updateAlert：仅记录，不中断加载
+      // updateAlert：记录供检测展示（如脚本版本过旧）
       if (name === EVENT_NAMES.updateAlert) {
-        console.warn('[source] updateAlert', payload?.log || payload)
+        const text = String(payload?.log || payload?.message || payload || '').trim()
+        if (text) updateAlerts.push(text)
+        console.warn('[source] updateAlert', text || payload)
       }
       return Promise.resolve()
     },
@@ -632,6 +637,7 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
     sourceKey: key,
     platforms,
     qualityMap,
+    updateAlerts,
     getMusicUrl,
     dispose() {
       disposed = true
