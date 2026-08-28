@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildQualityAttempts,
+  buildGlobalQualityLadder,
+  shouldTryQualityOnSource,
   isHighestQuality,
   normalizeMusicInfo,
   pickQuality,
@@ -27,6 +29,22 @@ describe('musicUrlResolve helpers', () => {
   it('fixed quality only attempts that quality', () => {
     expect(buildQualityAttempts(['128k', '320k', 'flac', 'flac24bit'], 'flac')).toEqual(['flac'])
     expect(buildQualityAttempts(['128k', '320k'], 'flac24bit')).toEqual(['flac24bit'])
+  })
+
+  it('buildGlobalQualityLadder unions sources and orders by ladder', () => {
+    expect(
+      buildGlobalQualityLadder('highest', [
+        ['128k', '320k'],
+        ['flac', '128k'],
+      ]),
+    ).toEqual(['flac', '320k', '128k'])
+    expect(buildGlobalQualityLadder('flac', [['128k', '320k']])).toEqual(['flac'])
+  })
+
+  it('shouldTryQualityOnSource skips unsupported tier on highest only', () => {
+    expect(shouldTryQualityOnSource(['320k', '128k'], 'flac', true)).toBe(false)
+    expect(shouldTryQualityOnSource(['320k', '128k'], '320k', true)).toBe(true)
+    expect(shouldTryQualityOnSource(['128k'], 'flac', false)).toBe(true)
   })
 
   it('pickQuality prefers flac24bit on highest', () => {

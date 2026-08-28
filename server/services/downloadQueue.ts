@@ -673,7 +673,7 @@ async function processTask(task: DownloadTaskRow) {
     // 试听片段：只标失败，不自动换源/重试；由用户在队列手动换源
     const isPreview = String(err?.code) === 'PREVIEW_CLIP'
     const isPerm = isDownloadPermissionError(err)
-    // 固定音质：取链失败不换源；仅网络/磁盘类可同源重试
+    // 固定音质：resolve 已轮询全部音源；失败即停并提示原因
     const retryable = isPreview || isPerm
       ? false
       : fixedQuality

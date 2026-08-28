@@ -26,7 +26,7 @@ export default defineEventHandler(async (event) => {
       quality: result.quality,
       sourceId: result.sourceId,
       sourceName: result.sourceName,
-      // 固定音质失败不会走到这里；highest 时可能已降级
+    // 固定音质失败不会走到这里；highest 时可能已降级
       degraded: isHighestQuality(qualityPref) && result.quality !== 'flac24bit' && result.quality !== 'flac',
     }
   } catch (err: any) {
