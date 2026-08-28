@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-28
+
 ### Added
 
 - 音源页「更多」支持一键停用所有异常音源（检测失败且仍启用的项，仅停用不删除）
@@ -138,7 +140,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/qwex888/miyin/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/qwex888/miyin/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/qwex888/miyin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qwex888/miyin/compare/v0.3.0...v0.4.0
