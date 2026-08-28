@@ -184,6 +184,9 @@ jobs:
             echo
           } >> release_notes.md
 
+      - name: Generate latest.json
+        run: node scripts/generate-latest-json.mjs "${{ needs.resolve.outputs.version }}" latest.json
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -191,12 +194,13 @@ jobs:
           TAG="${{ needs.resolve.outputs.tag }}"
           FPK="dist/miyin-v${{ needs.resolve.outputs.version }}.fpk"
           test -f "$FPK"
+          test -f latest.json
 
           if gh release view "$TAG" &>/dev/null; then
-            gh release upload "$TAG" "$FPK" --clobber
+            gh release upload "$TAG" "$FPK" latest.json --clobber
             gh release edit "$TAG" --title "觅音 $TAG" --notes-file release_notes.md
           else
-            gh release create "$TAG" "$FPK" \
+            gh release create "$TAG" "$FPK" latest.json \
               --title "觅音 $TAG" \
               --notes-file release_notes.md
           fi

@@ -46,6 +46,8 @@ export default defineNuxtConfig({
       appVersion: pkg.version,
       repoUrl: 'https://github.com/qwex888/miyin',
       feedbackUrl: 'https://github.com/qwex888/miyin/issues/new',
+      updateManifestUrl:
+        'https://github.com/qwex888/miyin/releases/latest/download/latest.json',
     },
   },
 })

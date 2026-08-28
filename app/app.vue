@@ -2,6 +2,7 @@
 const route = useRoute()
 const config = useRuntimeConfig()
 const pageSession = usePageSession()
+const { dialogOpen, latest, dismissUpdate } = useAppUpdate()
 
 useHead({
   title: () => config.public.appName,
@@ -43,6 +44,11 @@ useHead({
     </main>
     <AppBottomNav v-if="route.path !== '/login'" />
     <AppToast />
+    <UpdateChangelogDialog
+      v-model:open="dialogOpen"
+      :manifest="latest"
+      @dismiss="dismissUpdate"
+    />
   </div>
 </template>
 

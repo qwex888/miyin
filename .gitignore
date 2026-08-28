@@ -34,3 +34,6 @@ logs
 # 飞牛 FPK 构建产物
 packaging/fnos/miyin/app/server/
 *.fpk
+
+# 发版产物（CI 生成并上传 Release，不入库）
+latest.json

@@ -3,6 +3,11 @@ import { APP_NAV_LINKS, navLinkActive } from '~/utils/nav'
 
 const route = useRoute()
 const { activeCount } = useDownloadEvents()
+const { showBadge: showUpdateBadge, requestOpenOnSettings } = useAppUpdate()
+
+function onNavClick(to: string) {
+  if (to === '/settings' && showUpdateBadge.value) requestOpenOnSettings()
+}
 </script>
 
 <template>
@@ -13,9 +18,11 @@ const { activeCount } = useDownloadEvents()
       :to="l.to"
       class="tab"
       :class="{ active: navLinkActive(route.path, l.to) }"
+      @click="onNavClick(l.to)"
     >
       <span class="label">{{ l.short }}</span>
       <span v-if="l.badge && activeCount > 0" class="badge">{{ activeCount > 99 ? '99+' : activeCount }}</span>
+      <span v-if="l.to === '/settings' && showUpdateBadge" class="dot-badge" aria-hidden="true" />
     </NuxtLink>
   </nav>
 </template>
@@ -72,6 +79,15 @@ const { activeCount } = useDownloadEvents()
   font-weight: 700;
   line-height: 16px;
   text-align: center;
+}
+.dot-badge {
+  position: absolute;
+  top: 4px;
+  right: 22%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
 }
 
 @media (max-width: 768px) {

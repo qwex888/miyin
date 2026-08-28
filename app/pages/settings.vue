@@ -33,6 +33,15 @@ const loading = ref(false)
 const loadingText = ref('加载设置中…')
 const toast = useToast()
 const route = useRoute()
+const {
+  currentVersion,
+  latest,
+  checking,
+  showBadge,
+  checkForUpdate,
+  openChangelog,
+  consumePendingOpen,
+} = useAppUpdate()
 const fnosBox = ref<HTMLElement | null>(null)
 const {
   status: fnosAuth,
@@ -55,6 +64,23 @@ const templatePreview = computed(() => {
     .replaceAll('{id}', '186016')
     .replaceAll('{track}', '3')
 })
+
+async function onCheckUpdate() {
+  loadingText.value = '检查更新中…'
+  loading.value = true
+  try {
+    const res = await checkForUpdate(true)
+    if (res?.hasUpdate && res.latest) {
+      openChangelog()
+    } else {
+      toast.success('当前已是最新版本')
+    }
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '检查更新失败'))
+  } finally {
+    loading.value = false
+  }
+}
 
 async function load() {
   loadingText.value = '加载设置中…'
@@ -170,6 +196,7 @@ onMounted(async () => {
     void refreshFnOsAuth()
   })
   await load()
+  if (consumePendingOpen() && showBadge.value) openChangelog()
   if (route.query.fnosAuth === '1') scrollToFnOsBox()
 })
 
@@ -187,6 +214,26 @@ useRegisterPageRefresh(async () => {
   <div class="page page-settings">
     <PageLoading :show="loading" :text="loadingText" />
     <h2>设置</h2>
+    <section class="card version-card">
+      <div class="version-row">
+        <div>
+          <p class="version-label">当前版本</p>
+          <p class="version-value">v{{ currentVersion }}</p>
+        </div>
+        <button class="btn btn-ghost btn-sm" type="button" :disabled="checking || loading" @click="onCheckUpdate">
+          {{ checking ? '检查中…' : '检查更新' }}
+        </button>
+      </div>
+      <button
+        v-if="showBadge && latest"
+        type="button"
+        class="update-banner"
+        @click="openChangelog"
+      >
+        <span class="update-dot" aria-hidden="true" />
+        发现新版本 v{{ latest.version }}，点击查看更新说明
+      </button>
+    </section>
     <form class="card form" @submit.prevent="save">
       <label>
         <span>下载目录</span>
@@ -309,6 +356,53 @@ useRegisterPageRefresh(async () => {
 </template>
 
 <style scoped>
+.version-card {
+  display: grid;
+  gap: 12px;
+  max-width: 560px;
+  margin-bottom: 14px;
+  padding: 16px;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.version-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.version-value {
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.update-banner:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.update-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
 .form {
   display: grid;
   gap: 14px;
