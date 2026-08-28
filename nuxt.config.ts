@@ -1,4 +1,6 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+import pkg from './package.json' with { type: 'json' }
+
 const appBaseURL = process.env.NUXT_APP_BASE_URL || process.env.GATEWAY_PREFIX || '/'
 const normalizedBase = appBaseURL.endsWith('/') ? appBaseURL : `${appBaseURL}/`
 
@@ -41,6 +43,9 @@ export default defineNuxtConfig({
     sessionSecret: '',
     public: {
       appName: '觅音',
+      appVersion: pkg.version,
+      repoUrl: 'https://github.com/qwex888/miyin',
+      feedbackUrl: 'https://github.com/qwex888/miyin/issues/new',
     },
   },
 })

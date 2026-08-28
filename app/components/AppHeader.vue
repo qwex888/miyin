@@ -2,8 +2,8 @@
 import { APP_NAV_LINKS, navLinkActive } from '~/utils/nav'
 
 const route = useRoute()
-const { logout, authRequired } = useAuth()
 const { activeCount, startWatching } = useDownloadEvents()
+const { logout, authRequired } = useAuth()
 const { mode, cycle } = useTheme()
 const { canRefresh, busy: refreshBusy, refreshCurrentPage } = usePageRefreshAction()
 const toast = useToast()
@@ -85,7 +85,13 @@ onMounted(() => startWatching())
           <path d="M8 20h8M12 16v4" />
         </svg>
       </button>
-      <button v-if="authRequired" class="btn btn-ghost btn-sm logout-btn" type="button" @click="onLogout">
+      <AppHelpMenu />
+      <button
+        v-if="authRequired"
+        class="btn btn-ghost btn-sm logout-btn"
+        type="button"
+        @click="onLogout"
+      >
         退出
       </button>
     </div>
