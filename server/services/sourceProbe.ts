@@ -1,10 +1,12 @@
 import {
   acquireSourceRejectionGuard,
   loadLxSource,
+  runWithSourceLogSink,
   settleSourceNetworkErrors,
   type LxSourceHandle,
 } from './sourceRuntime'
 import { withTimeout } from '../utils/sourceBatchTimeout'
+import { type SourceLogReporter } from '#shared/sourceBatchProgress'
 
 /** 探针优先尝试的平台顺序 */
 export const PROBE_PLATFORM_ORDER = ['wy', 'kw', 'kg', 'tx', 'mg'] as const
@@ -37,12 +39,20 @@ export type SourceProbeResult = {
   platforms: string[]
   status: 'ok' | 'dead'
   lastError: string | null
+  /** 探针过程中收集的日志行（已带 [level] 前缀） */
+  logs: string[]
 }
 
 export type ProbeTarget = {
   platform: string
   quality: string
   musicInfo: Record<string, any>
+}
+
+export type ProbeLocalScriptOpts = {
+  onLog?: SourceLogReporter
+  name?: string
+  index?: number
 }
 
 /** 将原始错误归类为用户可感知的说明 */
@@ -150,7 +160,7 @@ function formatCheckUpdateFailure(raw: string, updateAlerts?: string[]): string 
 export async function probeLoadedHandle(
   handle: LxSourceHandle,
   netErrs: Error[],
-): Promise<SourceProbeResult> {
+): Promise<Omit<SourceProbeResult, 'logs'>> {
   const platforms = handle.platforms
   const updateAlerts = handle.updateAlerts
 
@@ -194,23 +204,48 @@ export async function probeLoadedHandle(
 }
 
 /** 加载本地脚本并执行完整检测（初始化 + 更新检查 + 试取链） */
-export async function probeLocalScript(localPath: string): Promise<SourceProbeResult> {
-  const guard = acquireSourceRejectionGuard()
-  let handle: LxSourceHandle | null = null
-  try {
-    handle = await loadLxSource(localPath, { bypassCache: true })
-    const netErrs = await settleSourceNetworkErrors(guard)
-    return await probeLoadedHandle(handle, netErrs)
-  } catch (err: any) {
-    return {
-      platforms: handle?.platforms || [],
-      status: 'dead',
-      lastError: classifySourceError(err?.message || String(err), {
-        updateAlerts: handle?.updateAlerts,
-      }),
-    }
-  } finally {
-    handle?.dispose()
-    guard.release()
+export async function probeLocalScript(
+  localPath: string,
+  opts?: ProbeLocalScriptOpts,
+): Promise<SourceProbeResult> {
+  const collected: string[] = []
+  const sink = (entry: { level: string; message: string }) => {
+    const line = `[${entry.level}] ${entry.message}`
+    collected.push(line)
+    void opts?.onLog?.({
+      level: entry.level as 'log' | 'info' | 'warn' | 'error',
+      message: entry.message,
+      name: opts.name,
+      index: opts.index,
+    })
   }
+
+  return runWithSourceLogSink(sink, async () => {
+    const guard = acquireSourceRejectionGuard()
+    let handle: LxSourceHandle | null = null
+    try {
+      handle = await loadLxSource(localPath, { bypassCache: true })
+      const netErrs = await settleSourceNetworkErrors(guard)
+      const probed = await probeLoadedHandle(handle, netErrs)
+      return {
+        platforms: probed.platforms,
+        status: probed.status,
+        lastError: probed.lastError,
+        logs: collected.slice(),
+      }
+    } catch (err: any) {
+      const summary = classifySourceError(err?.message || String(err), {
+        updateAlerts: handle?.updateAlerts,
+      })
+      return {
+        platforms: handle?.platforms || [],
+        status: 'dead',
+        lastError: summary,
+        logs: collected.slice(),
+      }
+    } finally {
+      handle?.dispose()
+      guard.release()
+    }
+  })
 }

@@ -2,6 +2,7 @@ import {
   formatSourceProgressText,
   type SourceBatchDoneEvent,
   type SourceBatchStreamEvent,
+  type SourceLogEvent,
   type SourceProgressPhase,
 } from '#shared/sourceBatchProgress'
 
@@ -20,11 +21,26 @@ function parseNdjsonLine(line: string): SourceBatchStreamEvent | null {
   }
 }
 
+export type SourceBatchNdjsonHandlers = {
+  onProgress?: (
+    text: string,
+    event: Extract<SourceBatchStreamEvent, { type: 'progress' }>,
+  ) => void
+  onLog?: (event: SourceLogEvent) => void
+}
+
 export async function fetchSourceBatchNdjson(
   path: string,
   init: RequestInit,
-  onProgress: (text: string, event: Extract<SourceBatchStreamEvent, { type: 'progress' }>) => void,
+  onProgressOrHandlers:
+    | ((text: string, event: Extract<SourceBatchStreamEvent, { type: 'progress' }>) => void)
+    | SourceBatchNdjsonHandlers,
 ): Promise<SourceBatchDoneEvent> {
+  const handlers: SourceBatchNdjsonHandlers =
+    typeof onProgressOrHandlers === 'function'
+      ? { onProgress: onProgressOrHandlers }
+      : onProgressOrHandlers
+
   const res = await fetch(apiUrl(path), {
     ...init,
     credentials: 'same-origin',
@@ -60,7 +76,7 @@ export async function fetchSourceBatchNdjson(
 
   const handleEvent = (event: SourceBatchStreamEvent) => {
     if (event.type === 'progress') {
-      onProgress(
+      handlers.onProgress?.(
         formatSourceProgressText({
           index: event.index,
           total: event.total,
@@ -69,6 +85,10 @@ export async function fetchSourceBatchNdjson(
         }),
         event,
       )
+      return
+    }
+    if (event.type === 'log') {
+      handlers.onLog?.(event)
       return
     }
     if (event.type === 'done') {

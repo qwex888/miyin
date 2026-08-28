@@ -7,9 +7,59 @@ import { request as httpRequest } from 'node:https'
 import { request as httpRequestPlain } from 'node:http'
 import { URL } from 'node:url'
 import { promisify } from 'node:util'
+import { inspect } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import type { SourceLogLevel } from '#shared/sourceBatchProgress'
 
 const inflateAsync = promisify(zlibInflate)
 const deflateAsync = promisify(zlibDeflate)
+
+export type SourceLogSink = (entry: { level: SourceLogLevel; message: string }) => void
+
+const sourceLogAls = new AsyncLocalStorage<SourceLogSink>()
+
+function formatSourceLogArgs(args: unknown[]): string {
+  return args
+    .map((a) => {
+      if (typeof a === 'string') return a
+      if (a instanceof Error) return a.stack || a.message
+      if (typeof a === 'undefined') return 'undefined'
+      try {
+        return inspect(a, {
+          depth: 4,
+          breakLength: 100,
+          maxStringLength: 4000,
+          colors: false,
+        })
+      } catch {
+        return String(a)
+      }
+    })
+    .join(' ')
+}
+
+/** 终端 + 可选前端日志槽（检测/导入探针期间） */
+export function emitSourceLog(level: SourceLogLevel, ...args: unknown[]) {
+  const message = formatSourceLogArgs(args)
+  const printer =
+    level === 'error'
+      ? console.error
+      : level === 'warn'
+        ? console.warn
+        : level === 'info'
+          ? console.info
+          : console.log
+  printer('[source]', ...args)
+  try {
+    sourceLogAls.getStore()?.({ level, message })
+  } catch {
+    /* ignore sink errors */
+  }
+}
+
+export function runWithSourceLogSink<T>(sink: SourceLogSink, fn: () => Promise<T>): Promise<T> {
+  return sourceLogAls.run(sink, fn)
+}
 
 export type LxSourceHandle = {
   platforms: string[]
@@ -123,7 +173,7 @@ function ensureRejectionGuard() {
       const e = reason instanceof Error ? reason : new Error(String(reason))
       for (const b of rejectionBuckets) b.errors.push(e)
       const kind = isBenignSourceNetworkError(reason) ? 'network error' : 'script error'
-      console.warn(`[source] ${kind}:`, e.message)
+      emitSourceLog('warn', `${kind}:`, e.message)
       // 已临时接管 unhandledRejection 监听，不再事后 catch（避免 PromiseRejectionHandledWarning）
       void promise
       return
@@ -227,7 +277,7 @@ function nodeHttpRequest(
     try {
       cb(err, resp)
     } catch (e) {
-      console.error('[source] request callback error', e)
+      emitSourceLog('error', 'request callback error', e)
     }
   }
   try {
@@ -536,7 +586,7 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
       if (name === EVENT_NAMES.updateAlert) {
         const text = String(payload?.log || payload?.message || payload || '').trim()
         if (text) updateAlerts.push(text)
-        console.warn('[source] updateAlert', text || payload)
+        emitSourceLog('warn', 'updateAlert', text || payload)
       }
       return Promise.resolve()
     },
@@ -544,10 +594,10 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
 
   const sandbox: Record<string, any> = {
     console: {
-      log: (...a: any[]) => console.log('[source]', ...a),
-      warn: (...a: any[]) => console.warn('[source]', ...a),
-      error: (...a: any[]) => console.error('[source]', ...a),
-      info: (...a: any[]) => console.info('[source]', ...a),
+      log: (...a: any[]) => emitSourceLog('log', ...a),
+      warn: (...a: any[]) => emitSourceLog('warn', ...a),
+      error: (...a: any[]) => emitSourceLog('error', ...a),
+      info: (...a: any[]) => emitSourceLog('info', ...a),
       group: () => {},
       groupEnd: () => {},
     },

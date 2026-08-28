@@ -17,6 +17,9 @@ export default defineEventHandler(async (event) => {
         onProgress: async (p) => {
           await stream.send({ type: 'progress', ...p })
         },
+        onLog: async (l) => {
+          await stream.send({ type: 'log', ...l })
+        },
       })
       await stream.send({
         type: 'done',

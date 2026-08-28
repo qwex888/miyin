@@ -20,6 +20,8 @@ export const SOURCE_PROGRESS_PHASE_LABEL: Record<SourceProgressPhase, string> = 
   failed: '失败',
 }
 
+export type SourceLogLevel = 'log' | 'info' | 'warn' | 'error'
+
 export type SourceProgressEvent = {
   type: 'progress'
   index: number
@@ -27,6 +29,14 @@ export type SourceProgressEvent = {
   name: string
   status: SourceProgressPhase
   error?: string
+}
+
+export type SourceLogEvent = {
+  type: 'log'
+  level: SourceLogLevel
+  message: string
+  name?: string
+  index?: number
 }
 
 export type SourceBatchDoneEvent = {
@@ -50,6 +60,7 @@ export type SourceBatchErrorEvent = {
 
 export type SourceBatchStreamEvent =
   | SourceProgressEvent
+  | SourceLogEvent
   | SourceBatchDoneEvent
   | SourceBatchErrorEvent
   | { type: 'start'; total: number }
@@ -61,6 +72,18 @@ export type SourceProgressReporter = (event: {
   status: SourceProgressPhase
   error?: string
 }) => void | Promise<void>
+
+export type SourceLogReporter = (event: {
+  level: SourceLogLevel
+  message: string
+  name?: string
+  index?: number
+}) => void | Promise<void>
+
+export type SourceBatchHandlers = {
+  onProgress?: SourceProgressReporter
+  onLog?: SourceLogReporter
+}
 
 export function sourceBatchTimeoutMs(total: number, itemMs = SOURCE_ITEM_TIMEOUT_MS): number {
   const n = Math.max(0, Math.floor(total))

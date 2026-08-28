@@ -11,7 +11,7 @@ import {
   type SourceRow,
 } from './sourceRegistry'
 import { allocateUniqueName, cleanSourceName } from './sourceImport'
-import type { SourceProgressReporter } from '#shared/sourceBatchProgress'
+import type { SourceBatchHandlers } from '#shared/sourceBatchProgress'
 import {
   SOURCE_ITEM_TIMEOUT_MS,
   createBatchDeadline,
@@ -228,7 +228,7 @@ export function previewSourcesBundle(zipBuffer: Buffer) {
 export async function applySourcesBundle(
   zipBuffer: Buffer,
   onConflict: 'overwrite' | 'skip',
-  opts?: { onProgress?: SourceProgressReporter },
+  opts?: SourceBatchHandlers,
 ): Promise<{
   total: number
   imported: number
@@ -308,6 +308,7 @@ export async function applySourcesBundle(
             await saveSourceScript(targetId, {
               script: item.script,
               name,
+              onLog: opts?.onLog,
               onPhase: async (status) => {
                 await reportProgress(opts?.onProgress, {
                   index,
@@ -343,6 +344,8 @@ export async function applySourcesBundle(
             url: item.url,
             script: item.script,
             enabled: item.enabled,
+            onLog: opts?.onLog,
+            logIndex: index,
             onPhase: async (status) => {
               await reportProgress(opts?.onProgress, {
                 index,

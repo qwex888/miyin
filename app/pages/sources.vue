@@ -21,11 +21,57 @@ const importText = ref('')
 const loading = ref(false)
 const loadingText = ref('加载中…')
 const pageLoading = ref(true)
+const batchLogs = ref<Array<{ level?: string; message: string; name?: string }>>([])
+const batchCompleted = ref(false)
+const batchCompletedText = ref('处理完成')
+let batchConfirmResolve: (() => void) | null = null
 const selected = ref<Set<string>>(new Set())
 const moreOpen = ref(false)
 const rowOpsId = ref<string | null>(null)
 const toast = useToast()
 
+function resetBatchUi() {
+  batchLogs.value = []
+  batchCompleted.value = false
+  batchCompletedText.value = '处理完成'
+  batchConfirmResolve = null
+}
+
+function beginBatchWithLogs(text: string) {
+  resetBatchUi()
+  loadingText.value = text
+  loading.value = true
+}
+
+function appendBatchLog(event: { level?: string; message: string; name?: string }) {
+  batchLogs.value.push({
+    level: event.level,
+    message: event.message,
+    name: event.name,
+  })
+}
+
+function waitBatchConfirm(completedText: string) {
+  batchCompletedText.value = completedText
+  batchCompleted.value = true
+  return new Promise<void>((resolve) => {
+    batchConfirmResolve = resolve
+  })
+}
+
+function onBatchConfirm() {
+  batchConfirmResolve?.()
+  batchConfirmResolve = null
+  batchCompleted.value = false
+  batchLogs.value = []
+  loading.value = false
+}
+
+const selectedCount = computed(() => selected.value.size)
+const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
+const showPageLoading = computed(
+  () => pageLoading.value || loading.value || batchCompleted.value,
+)
 const showConflict = ref(false)
 const conflictLoading = ref(false)
 const conflictPreview = ref<{
@@ -47,10 +93,6 @@ const conflictDescription = computed(() => {
   }
   return `完整包中有 ${preview.conflictCount} 个与现有音源冲突（同 ID 或同 URL），另有 ${preview.newCount} 个可直接新增。请选择对冲突项的处理方式：`
 })
-
-const selectedCount = computed(() => selected.value.size)
-const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
-const showPageLoading = computed(() => pageLoading.value || loading.value)
 
 async function load(opts?: { silent?: boolean }) {
   if (!opts?.silent) {
@@ -98,8 +140,7 @@ function openEdit(s: Source) {
 }
 
 async function doImport() {
-  loadingText.value = '当前进度：准备导入…'
-  loading.value = true
+  beginBatchWithLogs('当前进度：准备导入…')
   try {
     const done = await fetchSourceBatchNdjson(
       '/api/sources/import',
@@ -108,8 +149,11 @@ async function doImport() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: importText.value, stream: true }),
       },
-      (text) => {
-        loadingText.value = text
+      {
+        onProgress: (text) => {
+          loadingText.value = text
+        },
+        onLog: appendBatchLog,
       },
     )
     const ok = done.imported ?? 0
@@ -127,17 +171,17 @@ async function doImport() {
     showImport.value = false
     importText.value = ''
     await load({ silent: true })
+    await waitBatchConfirm(text)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入失败'))
-  } finally {
     loading.value = false
+    resetBatchUi()
   }
 }
 
 async function checkAll() {
   moreOpen.value = false
-  loadingText.value = '当前进度：准备检测…'
-  loading.value = true
+  beginBatchWithLogs('当前进度：准备检测…')
   try {
     const done = await fetchSourceBatchNdjson(
       '/api/sources/check',
@@ -146,8 +190,11 @@ async function checkAll() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stream: true }),
       },
-      (text) => {
-        loadingText.value = text
+      {
+        onProgress: (text) => {
+          loadingText.value = text
+        },
+        onLog: appendBatchLog,
       },
     )
     await load({ silent: true })
@@ -156,10 +203,11 @@ async function checkAll() {
     if (summary.level === 'success') toast.success(msg)
     else if (summary.level === 'warning') toast.warning(msg)
     else toast.error(msg)
+    await waitBatchConfirm(msg)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '检测失败'))
-  } finally {
     loading.value = false
+    resetBatchUi()
   }
 }
 
@@ -388,8 +436,7 @@ async function applyBundle(onConflict: 'overwrite' | 'skip') {
   const file = pendingBundleFile.value
   if (!file) return
   conflictLoading.value = true
-  loadingText.value = '当前进度：准备导入完整包…'
-  loading.value = true
+  beginBatchWithLogs('当前进度：准备导入完整包…')
   try {
     const fd = new FormData()
     fd.append('file', file, file.name)
@@ -398,8 +445,11 @@ async function applyBundle(onConflict: 'overwrite' | 'skip') {
     const done = await fetchSourceBatchNdjson(
       '/api/sources/import-bundle',
       { method: 'POST', body: fd },
-      (text) => {
-        loadingText.value = text
+      {
+        onProgress: (text) => {
+          loadingText.value = text
+        },
+        onLog: appendBatchLog,
       },
     )
     showConflict.value = false
@@ -414,11 +464,13 @@ async function applyBundle(onConflict: 'overwrite' | 'skip') {
     if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
     else toast.warning(text)
     await load({ silent: true })
+    conflictLoading.value = false
+    await waitBatchConfirm(text)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入完整包失败'))
-  } finally {
     conflictLoading.value = false
     loading.value = false
+    resetBatchUi()
   }
 }
 
@@ -426,8 +478,7 @@ async function applyDirFiles(onConflict: 'overwrite' | 'skip') {
   const files = pendingDirFiles.value
   if (!files.length) return
   conflictLoading.value = true
-  loadingText.value = '当前进度：准备导入目录…'
-  loading.value = true
+  beginBatchWithLogs('当前进度：准备导入目录…')
   try {
     const fd = new FormData()
     for (const f of files) fd.append('files', f, f.name)
@@ -436,8 +487,11 @@ async function applyDirFiles(onConflict: 'overwrite' | 'skip') {
     const done = await fetchSourceBatchNdjson(
       '/api/sources/upload',
       { method: 'POST', body: fd },
-      (text) => {
-        loadingText.value = text
+      {
+        onProgress: (text) => {
+          loadingText.value = text
+        },
+        onLog: appendBatchLog,
       },
     )
     showConflict.value = false
@@ -452,11 +506,13 @@ async function applyDirFiles(onConflict: 'overwrite' | 'skip') {
     if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
     else toast.warning(text)
     await load({ silent: true })
+    conflictLoading.value = false
+    await waitBatchConfirm(text)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入目录失败'))
-  } finally {
     conflictLoading.value = false
     loading.value = false
+    resetBatchUi()
   }
 }
 
@@ -520,7 +576,14 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
 
 <template>
   <div class="page page-sources">
-    <PageLoading :show="showPageLoading" :text="loadingText" />
+    <PageLoading
+      :show="showPageLoading"
+      :text="loadingText"
+      :logs="batchLogs"
+      :completed="batchCompleted"
+      :completed-text="batchCompletedText"
+      @confirm="onBatchConfirm"
+    />
     <div class="toolbar">
       <div class="title">
         <h2>音源管理</h2>
@@ -811,6 +874,9 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
   font-weight: 700;
 }
 .err {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 280px;
   color: var(--danger);
   font-size: 12px;
 }

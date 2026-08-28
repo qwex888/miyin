@@ -4,7 +4,7 @@ import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
 import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceImport'
 import { probeLocalScript } from './sourceProbe'
-import type { SourceProgressReporter } from '#shared/sourceBatchProgress'
+import type { SourceBatchHandlers, SourceProgressReporter } from '#shared/sourceBatchProgress'
 import {
   SOURCE_ITEM_TIMEOUT_MS,
   createBatchDeadline,
@@ -87,6 +87,8 @@ async function persistSource(input: {
   mirrorUrl?: string
   allowUpdate: boolean
   onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
+  onLog?: SourceBatchHandlers['onLog']
+  logIndex?: number
 }): Promise<SourceRow> {
   const id = idFromUrl(input.url)
   const existing = getSource(id)
@@ -101,7 +103,11 @@ async function persistSource(input: {
   writeFileSync(localPath, script, 'utf8')
 
   await input.onPhase?.('checking')
-  const probed = await probeLocalScript(localPath)
+  const probed = await probeLocalScript(localPath, {
+    onLog: input.onLog,
+    name: input.name,
+    index: input.logIndex,
+  })
   const platforms = probed.platforms
   const status = probed.status
   const lastError = probed.lastError
@@ -172,12 +178,20 @@ export async function addSource(input: { name: string; url: string; mirrorUrl?: 
 }
 
 /** 按 URL 写入或更新（检测/重新拉取脚本用） */
-export async function upsertSourceFromRemote(input: { name: string; url: string; mirrorUrl?: string }) {
+export async function upsertSourceFromRemote(input: {
+  name: string
+  url: string
+  mirrorUrl?: string
+  onLog?: SourceBatchHandlers['onLog']
+  logIndex?: number
+}) {
   return await persistSource({
     name: input.name,
     url: input.url,
     mirrorUrl: input.mirrorUrl,
     allowUpdate: true,
+    onLog: input.onLog,
+    logIndex: input.logIndex,
   })
 }
 
@@ -188,7 +202,7 @@ export async function upsertSourceFromRemote(input: { name: string; url: string;
  */
 export async function importSourcesText(
   text: string,
-  opts?: { onProgress?: SourceProgressReporter },
+  opts?: SourceBatchHandlers,
 ) {
   const parsed = parseSourceText(text)
   if (!parsed.length) {
@@ -261,6 +275,8 @@ export async function importSourcesText(
             name: finalName,
             url: item.url,
             allowUpdate: false,
+            onLog: opts?.onLog,
+            logIndex: index,
             onPhase: async (status) => {
               await reportProgress(opts?.onProgress, {
                 index,
@@ -384,6 +400,8 @@ export async function addSourceFromScript(input: {
   /** 单个新增：名称冲突时自动改成「名称 (2)」…；默认报错 */
   renameOnConflict?: boolean
   onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
+  onLog?: SourceBatchHandlers['onLog']
+  logIndex?: number
 }) {
   let name = cleanSourceName(input.name)
   const script = String(input.script || '')
@@ -427,7 +445,11 @@ export async function addSourceFromScript(input: {
   const localPath = getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
   await input.onPhase?.('checking')
-  const probed = await probeLocalScript(localPath)
+  const probed = await probeLocalScript(localPath, {
+    onLog: input.onLog,
+    name,
+    index: input.logIndex,
+  })
   const ts = nowIso()
   const enabled = input.enabled === false ? 0 : 1
 
@@ -459,6 +481,7 @@ export async function saveSourceScript(
     script: string
     name?: string
     onPhase?: (status: 'loading' | 'configuring' | 'checking') => void | Promise<void>
+    onLog?: SourceBatchHandlers['onLog']
   },
 ): Promise<SourceRow> {
   const row = getSource(id)
@@ -485,7 +508,10 @@ export async function saveSourceScript(
   const localPath = row.local_path || getSourceCachePath(id)
   writeFileSync(localPath, script, 'utf8')
   await input.onPhase?.('checking')
-  const probed = await probeLocalScript(localPath)
+  const probed = await probeLocalScript(localPath, {
+    onLog: input.onLog,
+    name,
+  })
   const ts = nowIso()
   getDb()
     .prepare(
@@ -609,7 +635,7 @@ export function previewSourcesFromFiles(files: Array<{ name: string; script: str
 export async function applySourcesFromFiles(
   files: Array<{ name: string; script: string }>,
   onConflict: 'overwrite' | 'skip',
-  opts?: { onProgress?: SourceProgressReporter },
+  opts?: SourceBatchHandlers,
 ): Promise<{
   total: number
   imported: number
@@ -679,6 +705,8 @@ export async function applySourcesFromFiles(
               const row = await addSourceFromScript({
                 name: item.name,
                 script: item.script,
+                onLog: opts?.onLog,
+                logIndex: index,
                 onPhase: async (status) => {
                   await reportProgress(opts?.onProgress, {
                     index,
@@ -701,6 +729,7 @@ export async function applySourcesFromFiles(
             await saveSourceScript(existing.id, {
               script: item.script,
               name: item.name,
+              onLog: opts?.onLog,
               onPhase: async (status) => {
                 await reportProgress(opts?.onProgress, {
                   index,
@@ -730,6 +759,8 @@ export async function applySourcesFromFiles(
           const row = await addSourceFromScript({
             name: item.name,
             script: item.script,
+            onLog: opts?.onLog,
+            logIndex: index,
             onPhase: async (status) => {
               await reportProgress(opts?.onProgress, {
                 index,
@@ -784,7 +815,7 @@ export function deleteSource(id: string) {
 
 export async function checkSources(
   ids?: string[],
-  opts?: { onProgress?: SourceProgressReporter },
+  opts?: SourceBatchHandlers,
 ) {
   const rows = ids?.length
     ? (ids.map((id) => getSource(id)).filter(Boolean) as SourceRow[])
@@ -829,6 +860,8 @@ export async function checkSources(
               name: row.name,
               url: row.url,
               mirrorUrl: row.mirror_url || undefined,
+              onLog: opts?.onLog,
+              logIndex: index,
             })
             const latest = getSource(row.id)
             out.push({
@@ -843,7 +876,11 @@ export async function checkSources(
               name: row.name,
               status: 'checking',
             })
-            const probed = await probeLocalScript(row.local_path)
+            const probed = await probeLocalScript(row.local_path, {
+              onLog: opts?.onLog,
+              name: row.name,
+              index,
+            })
             getDb()
               .prepare(
                 `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,

@@ -22,6 +22,10 @@ const emit = defineEmits<{
 const toast = useToast()
 const loading = ref(false)
 const progressText = ref('')
+const batchLogs = ref<Array<{ level?: string; message: string; name?: string }>>([])
+const batchCompleted = ref(false)
+const batchCompletedText = ref('处理完成')
+let batchConfirmResolve: (() => void) | null = null
 const name = ref('')
 const sourceTab = ref<'url' | 'upload' | 'script'>('url')
 const url = ref('')
@@ -30,6 +34,32 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFile = ref<File | null>(null)
 const dragOver = ref(false)
 const originalScript = ref('')
+
+function resetBatchUi() {
+  batchLogs.value = []
+  batchCompleted.value = false
+  batchCompletedText.value = '处理完成'
+  batchConfirmResolve = null
+}
+
+function waitBatchConfirm(text: string) {
+  batchCompletedText.value = text
+  batchCompleted.value = true
+  return new Promise<void>((resolve) => {
+    batchConfirmResolve = resolve
+  })
+}
+
+function onBatchConfirm() {
+  batchConfirmResolve?.()
+  batchConfirmResolve = null
+  batchCompleted.value = false
+  batchLogs.value = []
+  loading.value = false
+  progressText.value = ''
+}
+
+const showBatchLoading = computed(() => loading.value || batchCompleted.value)
 
 watch(
   () => open.value,
@@ -254,6 +284,7 @@ async function doCheck() {
     toast.info('请先保存音源后再检测')
     return
   }
+  resetBatchUi()
   loading.value = true
   progressText.value = '当前进度：准备检测…'
   try {
@@ -271,8 +302,17 @@ async function doCheck() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [props.source.id], stream: true }),
       },
-      (text) => {
-        progressText.value = text
+      {
+        onProgress: (text) => {
+          progressText.value = text
+        },
+        onLog: (event) => {
+          batchLogs.value.push({
+            level: event.level,
+            message: event.message,
+            name: event.name,
+          })
+        },
       },
     )
     const summary = summarizeSourceCheck(done.items || [])
@@ -280,17 +320,26 @@ async function doCheck() {
     else if (summary.level === 'warning') toast.warning(summary.message)
     else toast.error(summary.message)
     emit('saved')
+    await waitBatchConfirm(summary.message)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '检测失败'))
-  } finally {
     loading.value = false
     progressText.value = ''
+    resetBatchUi()
   }
 }
 </script>
 
 <template>
   <Teleport to="body">
+    <PageLoading
+      :show="showBatchLoading && !!progressText"
+      :text="progressText || '处理中…'"
+      :logs="batchLogs"
+      :completed="batchCompleted"
+      :completed-text="batchCompletedText"
+      @confirm="onBatchConfirm"
+    />
     <div v-if="open" class="drawer-backdrop" @click.self="onCancel">
       <div class="drawer form-drawer" role="dialog" aria-modal="true">
         <h3>{{ mode === 'edit' ? '编辑音源' : '单个新增' }}</h3>
@@ -409,7 +458,7 @@ async function doCheck() {
           </button>
           <button class="btn btn-ghost" type="button" :disabled="loading" @click="onCancel">取消</button>
         </div>
-        <p v-if="progressText" class="muted progress-line">{{ progressText }}</p>
+        <p v-if="progressText && !showBatchLoading" class="muted progress-line">{{ progressText }}</p>
       </div>
     </div>
   </Teleport>
