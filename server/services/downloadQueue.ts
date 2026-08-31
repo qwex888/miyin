@@ -12,7 +12,7 @@ import { Readable } from 'node:stream'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import PQueue from 'p-queue'
-import { getDb } from '../utils/db'
+import { getDb, checkpointAndShrinkDb } from '../utils/db'
 import { getDownloadDir } from '../utils/paths'
 import {
   assertDownloadDirWritable,
@@ -77,8 +77,19 @@ let intervalKickTimer: NodeJS.Timeout | null = null
 let lastStartedAt: number | null = null
 /** 上次任务结束时间戳（ms，成功/失败/取消均计） */
 let lastFinishedAt: number | null = null
+let idleShrinkTimer: NodeJS.Timeout | null = null
 const activeAbortControllers = new Map<string, AbortController>()
 const activeProcessingTasks = new Set<string>()
+
+function scheduleIdleShrinkDb() {
+  if (idleShrinkTimer) clearTimeout(idleShrinkTimer)
+  idleShrinkTimer = setTimeout(() => {
+    idleShrinkTimer = null
+    if (activeProcessingTasks.size === 0 && (!downloadQueue || downloadQueue.pending === 0)) {
+      checkpointAndShrinkDb()
+    }
+  }, 5000)
+}
 
 function getOrCreateDownloadQueue(concurrency: number): PQueue {
   if (!downloadQueue) {
@@ -762,7 +773,7 @@ async function downloadFile(
   }
   let received = 0
   const nodeStream = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
-  const out = createWriteStream(dest)
+  const out = createWriteStream(dest, { highWaterMark: 64 * 1024 })
   try {
     nodeStream.on('data', (chunk: Buffer) => {
       if (signal?.aborted) {
@@ -784,6 +795,8 @@ async function downloadFile(
       /* ignore */
     }
     throw err
+  } finally {
+    nodeStream.removeAllListeners()
   }
 }
 
@@ -988,6 +1001,8 @@ async function processTask(task: DownloadTaskRow) {
   } finally {
     activeAbortControllers.delete(task.id)
     activeProcessingTasks.delete(task.id)
+    lastEmitTimeByTaskId.delete(task.id)
+    lastEmitProgressByTaskId.delete(task.id)
   }
 }
 
@@ -1059,9 +1074,15 @@ export async function tickWorker() {
         await processTask({ ...fresh, status: 'queued' })
       } finally {
         lastFinishedAt = Date.now()
+        if (activeProcessingTasks.size === 0) {
+          scheduleIdleShrinkDb()
+        }
         kickWorker()
       }
     })
+  }
+  if (availableSlots > 0 && activeProcessingTasks.size === 0 && (!downloadQueue || downloadQueue.pending === 0)) {
+    scheduleIdleShrinkDb()
   }
 }
 

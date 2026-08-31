@@ -61,6 +61,11 @@ export function openDb(dataDir?: string) {
   mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
+  db.pragma('synchronous = NORMAL')
+  db.pragma('temp_store = MEMORY')
+  db.pragma('cache_size = -2000')
+  db.pragma('wal_autocheckpoint = 100')
+  db.pragma('mmap_size = 0')
   db.exec(SCHEMA)
   migrateSchema(db)
   return db
@@ -90,5 +95,16 @@ export function closeDb() {
   if (dbInstance) {
     dbInstance.close()
     dbInstance = null
+  }
+}
+
+export function checkpointAndShrinkDb() {
+  if (dbInstance) {
+    try {
+      dbInstance.pragma('wal_checkpoint(TRUNCATE)')
+      dbInstance.pragma('shrink_memory')
+    } catch {
+      /* ignore */
+    }
   }
 }
