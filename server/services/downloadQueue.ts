@@ -134,6 +134,8 @@ export function applyNameTemplate(
 
 export type ListTasksQuery = {
   status?: string
+  statuses?: string[]
+  tab?: 'running' | 'completed' | 'failed'
   playlistUrl?: string
   batchId?: string
   page?: number
@@ -151,10 +153,23 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   const whereClauses: string[] = []
   const params: unknown[] = []
 
-  if (q.status) {
+  if (q.tab) {
+    if (q.tab === 'running') {
+      whereClauses.push(`status IN ('running', 'queued')`)
+    } else if (q.tab === 'completed') {
+      whereClauses.push(`status = 'completed'`)
+    } else if (q.tab === 'failed') {
+      whereClauses.push(`status IN ('failed', 'cancelled')`)
+    }
+  } else if (q.statuses && q.statuses.length > 0) {
+    const placeholders = q.statuses.map(() => '?').join(',')
+    whereClauses.push(`status IN (${placeholders})`)
+    params.push(...q.statuses)
+  } else if (q.status) {
     whereClauses.push('status = ?')
     params.push(q.status)
   }
+
   if (q.playlistUrl) {
     whereClauses.push('playlist_url = ?')
     params.push(q.playlistUrl)
@@ -165,19 +180,27 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   }
 
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
+  let orderBySql = 'ORDER BY created_at DESC'
+  if (q.tab === 'running') {
+    // 下载中（running）排在最前，排队中（queued）按入队先后顺序排列
+    orderBySql = `ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END ASC, created_at ASC`
+  } else if (q.tab === 'completed') {
+    orderBySql = `ORDER BY updated_at DESC, created_at DESC`
+  }
+
   const page = q.page && q.page > 0 ? q.page : undefined
   const pageSize = q.pageSize && q.pageSize > 0 ? Math.min(q.pageSize, 1000) : undefined
 
   if (page && pageSize) {
     const offset = (page - 1) * pageSize
     return getDb()
-      .prepare(`SELECT * FROM download_tasks ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .prepare(`SELECT * FROM download_tasks ${whereSql} ${orderBySql} LIMIT ? OFFSET ?`)
       .all(...params, pageSize, offset) as DownloadTaskRow[]
   }
 
   const limit = q.limit && q.limit > 0 ? q.limit : 200
   return getDb()
-    .prepare(`SELECT * FROM download_tasks ${whereSql} ORDER BY created_at DESC LIMIT ?`)
+    .prepare(`SELECT * FROM download_tasks ${whereSql} ${orderBySql} LIMIT ?`)
     .all(...params, limit) as DownloadTaskRow[]
 }
 
@@ -433,18 +456,24 @@ export function cancelTask(id: string) {
   return getTask(id)!
 }
 
-export function batchCancelTasks(ids: string[]) {
+export function batchCancelTasks(ids?: string[], opts?: { tab?: 'running' }) {
+  const targetIds: string[] = []
+  if (ids && ids.length > 0) {
+    targetIds.push(...ids)
+  } else if (opts?.tab === 'running') {
+    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('running', 'queued')`).all() as Array<{ id: string }>
+    targetIds.push(...rows.map((r) => r.id))
+  }
   const items = []
-  for (const id of ids) {
+  for (const id of targetIds) {
     try {
       items.push(cancelTask(id))
     } catch (e: any) {
       items.push({ id, error: e?.message || String(e) })
     }
   }
-  return { count: ids.length, items }
+  return { count: targetIds.length, items }
 }
-
 /** 删除任务记录；可选删除本地音频与歌词 */
 export function deleteTask(id: string, opts?: { deleteLocalFiles?: boolean }) {
   const task = getTask(id)
@@ -458,10 +487,20 @@ export function deleteTask(id: string, opts?: { deleteLocalFiles?: boolean }) {
   return { ok: true, id }
 }
 
-export function batchDeleteTasks(ids: string[], opts?: { deleteLocalFiles?: boolean }) {
+export function batchDeleteTasks(ids?: string[], opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed' }) {
+  const targetIds: string[] = []
+  if (ids && ids.length > 0) {
+    targetIds.push(...ids)
+  } else if (opts?.tab === 'completed') {
+    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status = 'completed'`).all() as Array<{ id: string }>
+    targetIds.push(...rows.map((r) => r.id))
+  } else if (opts?.tab === 'failed') {
+    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`).all() as Array<{ id: string }>
+    targetIds.push(...rows.map((r) => r.id))
+  }
   let deleted = 0
   const errors: Array<{ id: string; error: string }> = []
-  for (const id of ids) {
+  for (const id of targetIds) {
     try {
       deleteTask(id, opts)
       deleted += 1
@@ -536,9 +575,16 @@ export function switchQualityAndRetry(id: string, quality: string) {
   }
 }
 
-export function batchRetryTasks(ids: string[], opts?: { resetAttempts?: boolean }) {
+export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean; tab?: 'failed' }) {
+  const targetIds: string[] = []
+  if (ids && ids.length > 0) {
+    targetIds.push(...ids)
+  } else if (opts?.tab === 'failed') {
+    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`).all() as Array<{ id: string }>
+    targetIds.push(...rows.map((r) => r.id))
+  }
   const items = []
-  for (const id of ids) {
+  for (const id of targetIds) {
     try {
       items.push(retryTask(id, opts))
     } catch (e: any) {
@@ -546,7 +592,7 @@ export function batchRetryTasks(ids: string[], opts?: { resetAttempts?: boolean 
     }
   }
   kickWorker()
-  return { count: ids.length, items }
+  return { count: targetIds.length, items }
 }
 
 /**
