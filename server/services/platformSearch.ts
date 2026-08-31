@@ -18,24 +18,45 @@ export type SearchTrack = {
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-async function fetchText(url: string, init?: RequestInit, ms = 10000) {
-  const controller = new AbortController()
-  const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
-  const timer = setTimeout(() => controller.abort(), ms)
-  try {
-    const res = await fetch(url, {
-      ...init,
-      signal,
-      headers: {
-        'User-Agent': UA,
-        ...(init?.headers || {}),
-      },
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.text()
-  } finally {
-    clearTimeout(timer)
+async function fetchText(url: string, init?: RequestInit, ms = 15000) {
+  const maxRetries = 2
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (init?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+    const controller = new AbortController()
+    const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
+    const timer = setTimeout(() => controller.abort(), ms)
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal,
+        headers: {
+          'User-Agent': UA,
+          ...(init?.headers || {}),
+        },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.text()
+    } catch (err: any) {
+      lastErr = err
+      // 如果是外部调用者主动中断，立即抛出不重试
+      if (init?.signal?.aborted) {
+        throw err
+      }
+      // 如果是自身超时 abort 或网络波动且还有重试次数，退避后重试
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)))
+        continue
+      }
+    } finally {
+      clearTimeout(timer)
+    }
   }
+  throw lastErr
 }
 
 async function fetchJson(url: string, init?: RequestInit, ms = 10000) {

@@ -401,6 +401,23 @@ function openEnqueueResult(res: EnqueueResultPayload) {
     toast.warning('未能入队任何曲目')
   }
 }
+async function retryFailedEnqueue(failedItems: Array<{ title: string; ok: boolean; error?: string }>) {
+  if (!preview.value || !failedItems.length) return
+  const failedTitles = new Set(failedItems.map((f) => f.title.trim()))
+  const failedIndices: number[] = []
+  preview.value.tracks.forEach((t, i) => {
+    if (failedTitles.has(t.title.trim())) {
+      failedIndices.push(i)
+    }
+  })
+  if (!failedIndices.length) {
+    toast.warning('未能在当前歌单中找到对应失败曲目')
+    return
+  }
+  selected.value = new Set(failedIndices)
+  toast.info(`已选中 ${failedIndices.length} 首失败曲目，准备重试匹配…`)
+  await prepareSelectedDownload()
+}
 
 async function confirmAndEnqueue() {
   await enqueueMatched(matchRows.value)
@@ -509,7 +526,11 @@ async function confirmAndEnqueue() {
       @confirm="confirmAndEnqueue"
     />
 
-    <EnqueueResultDialog v-model:open="showResult" :result="result" />
+    <EnqueueResultDialog
+      v-model:open="showResult"
+      :result="result"
+      @retry-failed="retryFailedEnqueue"
+    />
   </div>
 </template>
 
