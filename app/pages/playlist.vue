@@ -78,12 +78,10 @@ const quality = ref<DownloadQuality>('highest')
 const playlistPlatformHint = computed(() => platformListText(PLAYLIST_PLATFORM_ORDER))
 const toast = useToast()
 const loadingText = ref('加载中…')
-
-function openEnqueueResult(res: EnqueueResultPayload) {
-  result.value = res
-  showResult.value = true
-  useDownloadBadge().notifyChanged()
-}
+const loadingDetail = ref('')
+const loadingPercent = ref<number | null>(null)
+const abortControllerRef = ref<AbortController | null>(null)
+const cancelText = ref('取消')
 
 async function loadDefaults() {
   const s = await $fetch<{
@@ -137,63 +135,172 @@ function toggleAll() {
   selected.value = new Set(preview.value.tracks.map((_, i) => i))
 }
 
+function cancelOperation() {
+  if (abortControllerRef.value) {
+    abortControllerRef.value.abort()
+    abortControllerRef.value = null
+  }
+  loading.value = false
+  toast.info('已取消当前操作')
+}
+
 async function parseOnly() {
   result.value = null
   matchRows.value = []
   showConfirm.value = false
-  loadingText.value = '解析歌单中…'
+  loadingText.value = '正在解析歌单…'
+  loadingDetail.value = ''
+  loadingPercent.value = null
+  cancelText.value = '取消解析'
   loading.value = true
+
+  const abortController = new AbortController()
+  abortControllerRef.value = abortController
+
   try {
-    const res = await $fetch<PlaylistPreview>('/api/playlist/parse', {
-      method: 'POST',
-      body: { url: url.value },
-    })
-    preview.value = { ...res, url: url.value }
-    selected.value = new Set(res.tracks.map((_, i) => i))
-    toast.success(`解析成功：${res.title}，共 ${res.tracks.length} 首（已全选）`)
+    const res = await fetchPlaylistParseNdjson(
+      { url: url.value },
+      {
+        signal: abortController.signal,
+        onProgress: (ev) => {
+          const total = ev.total || 0
+          loadingText.value = total > 0 ? `正在解析歌单 (${ev.index}/${total})` : `正在解析歌单 (${ev.index})`
+          loadingDetail.value = ev.title ? `曲目：${ev.title}` : ''
+          loadingPercent.value = total > 0 ? Math.round((ev.index / total) * 100) : null
+        },
+      },
+    )
+    const tracks = (res.tracks || []).map((t: Track) => ({
+      ...t,
+      musicInfo: undefined,
+      matchMethod: undefined,
+    }))
+    preview.value = {
+      platform: res.platform,
+      title: res.title,
+      url: res.url || url.value,
+      tracks,
+    }
+    selected.value = new Set(tracks.map((_, i) => i))
+    toast.success(`解析成功：${res.title}，共 ${tracks.length} 首（已全选）`)
   } catch (e: unknown) {
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError' || abortController.signal.aborted) {
+      return
+    }
     toast.error(apiErrorMessage(e, '解析失败'))
     preview.value = null
     selected.value = new Set()
   } finally {
+    if (abortControllerRef.value === abortController) {
+      abortControllerRef.value = null
+    }
     loading.value = false
   }
 }
-
 async function enqueueAll() {
   loadingText.value = '解析并入队中…'
+  loadingDetail.value = ''
+  loadingPercent.value = null
+  cancelText.value = '取消下载'
   loading.value = true
+
+  const abortController = new AbortController()
+  abortControllerRef.value = abortController
+
   try {
-    const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
-      method: 'POST',
-      body: {
+    const res = await fetchPlaylistEnqueueNdjson(
+      {
         url: url.value,
         downloadLyric: withLyric.value,
         lyricMode: lyricMode.value,
         quality: quality.value,
+        concurrency: 8,
       },
-    })
+      {
+        signal: abortController.signal,
+        onStart: (total, stage) => {
+          if (stage === 'matching') {
+            loadingText.value = `正在匹配并入队 (0/${total})`
+            loadingPercent.value = 0
+          } else {
+            loadingText.value = '正在解析歌单…'
+            loadingPercent.value = null
+          }
+        },
+        onParseProgress: (ev) => {
+          const total = ev.total || 0
+          loadingText.value = total > 0 ? `正在解析歌单 (${ev.index}/${total})` : `正在解析歌单 (${ev.index})`
+          loadingDetail.value = ev.title ? `曲目：${ev.title}` : ''
+          loadingPercent.value = total > 0 ? Math.round((ev.index / total) * 100) : null
+        },
+        onProgress: (ev) => {
+          const statusStr = ev.ok === false ? ' [未匹配]' : ''
+          loadingText.value = `正在匹配并入队 (${ev.index}/${ev.total})`
+          loadingDetail.value = `${ev.title}${statusStr}`
+          loadingPercent.value = ev.total > 0 ? Math.round((ev.index / ev.total) * 100) : null
+        },
+      },
+    )
     openEnqueueResult(res)
   } catch (e: unknown) {
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError' || abortController.signal.aborted) {
+      return
+    }
     toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
+    if (abortControllerRef.value === abortController) {
+      abortControllerRef.value = null
+    }
     loading.value = false
   }
 }
-
 async function prepareSelectedDownload() {
   if (!preview.value || !selected.value.size) return
-  loadingText.value = '匹配曲目中…'
+  const rawTracks = preview.value.tracks.filter((_, i) => selected.value.has(i))
+  // 深拷贝原始曲目并清除之前的匹配状态，杜绝污染或残留状态
+  const tracks: Track[] = rawTracks.map((t) => ({
+    title: t.title,
+    artist: t.artist,
+    album: t.album,
+    duration: t.duration,
+    platform: t.platform,
+    externalId: t.externalId,
+  }))
+
+  matchRows.value = []
+  confirmChoices.value = {}
+  loadingText.value = `正在匹配曲目 (0/${tracks.length})`
+  loadingDetail.value = ''
+  loadingPercent.value = 0
+  cancelText.value = '取消匹配'
   loading.value = true
+
+  const abortController = new AbortController()
+  abortControllerRef.value = abortController
+
   try {
-    const tracks = preview.value.tracks.filter((_, i) => selected.value.has(i))
-    const res = await $fetch<{ rows: MatchRow[]; needConfirm: number; autoOk: number }>(
-      '/api/playlist/match',
-      { method: 'POST', body: { tracks } },
+    let doneCount = 0
+    const res = await fetchPlaylistMatchNdjson(
+      { tracks, concurrency: 8, allowManualBypass: false },
+      {
+        signal: abortController.signal,
+        onStart: (total) => {
+          loadingText.value = `正在匹配曲目 (0/${total})`
+          loadingPercent.value = 0
+        },
+        onProgress: (ev) => {
+          doneCount++
+          loadingText.value = `正在匹配曲目 (${doneCount}/${ev.total})`
+          loadingDetail.value = `${ev.track.title} - ${ev.track.artist || '未知歌手'}`
+          loadingPercent.value = ev.total > 0 ? Math.round((doneCount / ev.total) * 100) : 0
+        },
+      },
     )
-    matchRows.value = res.rows
+    matchRows.value = res.rows as MatchRow[]
     const choices: Record<number, number | 'skip'> = {}
-    for (const row of res.rows) {
+    for (const row of res.rows as MatchRow[]) {
       if (row.needsConfirm) {
         choices[row.index] = row.selected ? 0 : 'skip'
       }
@@ -203,11 +310,19 @@ async function prepareSelectedDownload() {
       showConfirm.value = true
       toast.warning(`需确认 ${res.needConfirm} 首低分/未命中匹配（自动通过 ${res.autoOk}）`)
     } else {
-      await enqueueMatched(res.rows)
+      await enqueueMatched(res.rows as MatchRow[])
     }
   } catch (e: unknown) {
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError' || abortController.signal.aborted) {
+      // 用户主动取消，不报 error toast
+      return
+    }
     toast.error(apiErrorMessage(e, '匹配失败'))
   } finally {
+    if (abortControllerRef.value === abortController) {
+      abortControllerRef.value = null
+    }
     loading.value = false
   }
 }
@@ -285,11 +400,15 @@ async function confirmAndEnqueue() {
 
 <template>
   <div class="page page-playlist">
-    <PageLoading :show="loading" :text="loadingText" />
-    <h2>歌单导入</h2>
-    <p class="muted">
-      支持 {{ playlistPlatformHint }} 歌单链接。解析后可多选；低分匹配会弹出人工确认。
-    </p>
+    <PageLoading
+      :show="loading"
+      :text="loadingText"
+      :detail="loadingDetail"
+      :percent="loadingPercent"
+      :cancelable="Boolean(abortControllerRef)"
+      :cancel-text="cancelText"
+      @cancel="cancelOperation"
+    />
     <div class="row">
       <input
         v-model="url"

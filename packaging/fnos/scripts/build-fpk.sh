@@ -39,7 +39,7 @@ echo "==> pnpm install"
 pnpm install --frozen-lockfile
 
 echo "==> build with gateway baseURL"
-NUXT_APP_BASE_URL=/app/miyin/ GATEWAY_PREFIX=/app/miyin/ pnpm build
+MSYS_NO_PATHCONV=1 NUXT_APP_BASE_URL=/app/miyin/ GATEWAY_PREFIX=/app/miyin/ pnpm build
 
 echo "==> stage server payload"
 rm -rf "$SERVER_DIR"

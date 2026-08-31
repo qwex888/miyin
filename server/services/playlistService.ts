@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import PQueue from 'p-queue'
 import { PLAYLIST_PLATFORM_ORDER, platformLabel, platformListText } from '#shared/platforms'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequestPlain } from 'node:http'
@@ -158,17 +159,23 @@ function mapQqSongs(songs: any[]): PlaylistTrackDraft[] {
 
 async function fetchWithTimeout(url: string, init?: RequestInit, ms = 20000): Promise<Response> {
   const controller = new AbortController()
+  const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
   const t = setTimeout(() => controller.abort(), ms)
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    return await fetch(url, { ...init, signal })
   } finally {
     clearTimeout(t)
   }
 }
 
 /** kg CDN 证书常与域名不匹配，用 Node http(s) 且不校验证书 */
-function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000): Promise<any> {
+function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000, signal?: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      return reject(err)
+    }
     try {
       const u = new URL(url)
       const lib = u.protocol === 'http:' ? httpRequestPlain : httpsRequest
@@ -182,7 +189,7 @@ function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000
           headers,
           timeout: ms,
           rejectUnauthorized: false,
-        } as any,
+        } as unknown as Record<string, unknown>,
         (res) => {
           const chunks: Buffer[] = []
           res.on('data', (c) => chunks.push(c))
@@ -200,7 +207,22 @@ function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000
           })
         },
       )
-      req.on('error', reject)
+      const onAbort = () => {
+        req.destroy()
+        const err = new Error('The operation was aborted')
+        err.name = 'AbortError'
+        reject(err)
+      }
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+      req.on('error', (err) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+        reject(err)
+      })
+      req.on('close', () => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+      })
       req.on('timeout', () => {
         req.destroy()
         reject(new Error('timeout'))
@@ -216,19 +238,24 @@ function fetchKugouJson(url: string, headers: Record<string, string>, ms = 20000
  * 跟随短链 / 302，尽量得到可提取 id 的最终 URL。
  * 也会从 HTML 中兜底抓取 playlist id。
  */
-export async function resolvePlaylistUrl(input: string): Promise<string> {
+export async function resolvePlaylistUrl(input: string, opts?: { signal?: AbortSignal }): Promise<string> {
   let current = input.trim()
   if (!/^https?:\/\//i.test(current)) return current
 
   for (let i = 0; i < 5; i++) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     if (extractQqPlaylistId(current) || extractNeteasePlaylistId(current)) return current
 
     const res = await fetchWithTimeout(current, {
       method: 'GET',
       redirect: 'manual',
       headers: { 'User-Agent': UA, Referer: 'https://y.qq.com/' },
+      signal: opts?.signal,
     })
-
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location')
       if (!loc) break
@@ -265,14 +292,19 @@ export async function resolvePlaylistUrl(input: string): Promise<string> {
   return current
 }
 
-async function fetchQqViaMusicu(id: string, url: string): Promise<PlaylistDraft> {
+async function fetchQqViaMusicu(id: string, url: string, opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void }): Promise<PlaylistDraft> {
   const pageSize = 100
   let begin = 0
   let title = `歌单 ${id}`
-  const all: any[] = []
+  const all: unknown[] = []
   let total = Infinity
 
   while (begin < total && begin < 5000) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     const body = {
       comm: { ct: 24, cv: 0 },
       req_0: {
@@ -291,17 +323,26 @@ async function fetchQqViaMusicu(id: string, url: string): Promise<PlaylistDraft>
       method: 'POST',
       headers: { ...QQ_HEADERS, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: opts?.signal,
     })
     if (!res.ok) throw new Error(`musicu HTTP ${res.status}`)
-    const data = await res.json()
-    const payload = data?.req_0?.data
-    if (data?.req_0?.code !== 0 || payload?.code !== 0) {
-      throw new Error(`musicu code ${data?.req_0?.code}/${payload?.code}`)
+    const data = await res.json() as Record<string, unknown>
+    const payload = (data?.req_0 as Record<string, unknown>)?.data as Record<string, unknown>
+    if ((data?.req_0 as Record<string, unknown>)?.code !== 0 || payload?.code !== 0) {
+      throw new Error(`musicu code ${(data?.req_0 as Record<string, unknown>)?.code}/${payload?.code}`)
     }
-    title = payload?.dirinfo?.title || title
-    total = Number(payload?.dirinfo?.songnum || 0) || total
-    const chunk = payload?.songlist || []
+    const dirinfo = payload?.dirinfo as Record<string, unknown> | undefined
+    title = (dirinfo?.title as string) || title
+    total = Number(dirinfo?.songnum || 0) || total
+    const chunk = (payload?.songlist as unknown[]) || []
     all.push(...chunk)
+    if (opts?.onProgress) {
+      opts.onProgress({
+        index: all.length,
+        total: Number.isFinite(total) ? total : all.length,
+        title,
+      })
+    }
     if (!chunk.length || chunk.length < pageSize) break
     begin += chunk.length
   }
@@ -311,53 +352,74 @@ async function fetchQqViaMusicu(id: string, url: string): Promise<PlaylistDraft>
   return { platform: 'tx', title, url, tracks }
 }
 
-async function fetchQqViaV8(id: string, url: string): Promise<PlaylistDraft> {
+async function fetchQqViaV8(id: string, url: string, opts?: { signal?: AbortSignal }): Promise<PlaylistDraft> {
   const api =
     `https://c.y.qq.com/v8/fcg-bin/fcg_v8_playlist_cp.fcg?newsong=1&id=${encodeURIComponent(id)}` +
     `&format=json&inCharset=utf-8&outCharset=utf-8`
-  const res = await fetchWithTimeout(api, { headers: QQ_HEADERS })
+  const res = await fetchWithTimeout(api, { headers: QQ_HEADERS, signal: opts?.signal })
   if (!res.ok) throw new Error(`v8 HTTP ${res.status}`)
-  const data = await res.json()
+  const data = await res.json() as Record<string, unknown>
   if (data?.code !== 0) throw new Error(`v8 code ${data?.code}`)
-  const cd = data?.data?.cdlist?.[0]
-  if (!cd) throw new Error('v8 无歌单')
-  const tracks = mapQqSongs(cd.songlist || [])
+  const cd = (data?.data as Record<string, unknown>)?.cdlist as Array<Record<string, unknown>> | undefined
+  const cd0 = cd?.[0]
+  if (!cd0) throw new Error('v8 无歌单')
+  const tracks = mapQqSongs((cd0.songlist as unknown[]) || [])
   if (!tracks.length) throw new Error('v8 无曲目')
   return {
     platform: 'tx',
-    title: cd.dissname || `歌单 ${id}`,
+    title: (cd0.dissname as string) || `歌单 ${id}`,
     url,
     tracks,
   }
 }
 
-async function fetchQqViaGetCdInfo(id: string, url: string): Promise<PlaylistDraft> {
+async function fetchQqViaGetCdInfo(id: string, url: string, opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void }): Promise<PlaylistDraft> {
   const pageSize = 100
   let begin = 0
   let title = `歌单 ${id}`
-  const all: any[] = []
+  const all: unknown[] = []
   let total = Infinity
 
   while (begin < total && begin < 5000) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     const api =
       `https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?type=1&json=1&utf8=1&onlysong=0` +
       `&new_format=1&disstid=${encodeURIComponent(id)}&format=json&inCharset=utf8&outCharset=utf-8` +
       `&platform=yqq.json&needNewCode=0&song_begin=${begin}&song_num=${pageSize}`
-    const res = await fetchWithTimeout(api, { headers: QQ_HEADERS })
+    const res = await fetchWithTimeout(api, { headers: QQ_HEADERS, signal: opts?.signal })
     if (!res.ok) throw new Error(`getcdinfo HTTP ${res.status}`)
-    const data = await res.json()
+    const data = await res.json() as Record<string, unknown>
     if (data?.code !== 0) throw new Error(`getcdinfo code ${data?.code}`)
-    const cd = data?.cdlist?.[0]
-    if (!cd) throw new Error('getcdinfo 无歌单')
-    title = cd.dissname || title
-    total = Number(cd.songnum || 0) || total
-    const chunk = cd.songlist || []
+    const cd = (data?.cdlist as Array<Record<string, unknown>>) || []
+    const cd0 = cd[0]
+    if (!cd0) throw new Error('getcdinfo 无歌单')
+    title = (cd0.dissname as string) || title
+    total = Number(cd0.songnum || 0) || total
+    const chunk = (cd0.songlist as unknown[]) || []
     // 首次拿全量时接口可能一次返回全部
     if (begin === 0 && chunk.length >= total) {
       all.push(...chunk)
+      if (opts?.onProgress) {
+        opts.onProgress({
+          index: all.length,
+          total: Number.isFinite(total) ? total : all.length,
+          title,
+        })
+      }
       break
     }
     all.push(...chunk)
+    if (opts?.onProgress) {
+      opts.onProgress({
+        index: all.length,
+        total: Number.isFinite(total) ? total : all.length,
+        title,
+      })
+    }
     if (!chunk.length || chunk.length < pageSize) break
     begin += chunk.length
   }
@@ -367,7 +429,7 @@ async function fetchQqViaGetCdInfo(id: string, url: string): Promise<PlaylistDra
   return { platform: 'tx', title, url, tracks }
 }
 
-async function parseQqPlaylist(id: string, url: string): Promise<PlaylistDraft> {
+async function parseQqPlaylist(id: string, url: string, opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void }): Promise<PlaylistDraft> {
   const errors: string[] = []
   const fetchers = [
     { name: 'musicu', fn: fetchQqViaMusicu },
@@ -375,10 +437,17 @@ async function parseQqPlaylist(id: string, url: string): Promise<PlaylistDraft> 
     { name: 'getcdinfo', fn: fetchQqViaGetCdInfo },
   ]
   for (const { name, fn } of fetchers) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     try {
-      return await fn(id, url)
-    } catch (err: any) {
-      errors.push(`${name}: ${err?.message || err}`)
+      return await fn(id, url, opts)
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string }
+      if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
+      errors.push(`${name}: ${e?.message || String(err)}`)
     }
   }
   throw createError({
@@ -396,7 +465,7 @@ function splitKgFilename(filename: string): { artist: string; title: string } {
   return { artist: '未知', title: raw || '未知' }
 }
 
-async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraft> {
+async function parseKugouPlaylist(id: string, url: string, opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void }): Promise<PlaylistDraft> {
   const headers = { 'User-Agent': UA, Referer: 'https://www.kugou.com/' }
   // CDN 证书常与域名不匹配，优先 http；多域名回退
   const hosts = [
@@ -408,10 +477,17 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
   async function getJson(path: string) {
     const errors: string[] = []
     for (const host of hosts) {
+      if (opts?.signal?.aborted) {
+        const err = new Error('The operation was aborted')
+        err.name = 'AbortError'
+        throw err
+      }
       try {
-        return await fetchKugouJson(`${host}${path}`, headers)
-      } catch (err: any) {
-        errors.push(`${host}: ${err?.message || err}`)
+        return (await fetchKugouJson(`${host}${path}`, headers, 20000, opts?.signal)) as Record<string, unknown>
+      } catch (err: unknown) {
+        const e = err as { name?: string; message?: string }
+        if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
+        errors.push(`${host}: ${e?.message || String(err)}`)
       }
     }
     throw new Error(errors.join('；') || `${platformLabel('kg')} 接口不可用`)
@@ -420,7 +496,8 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
   let title = `歌单 ${id}`
   try {
     const info = await getJson(`/api/v3/special/info?specialid=${encodeURIComponent(id)}`)
-    title = info?.data?.specialname || title
+    const data = info?.data as Record<string, unknown> | undefined
+    title = (data?.specialname as string) || title
   } catch {
     /* ignore title failure */
   }
@@ -428,31 +505,45 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
   const pageSize = 50
   let page = 1
   let total = Infinity
-  const all: any[] = []
+  const all: unknown[] = []
   while (all.length < total && page <= 40) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     const data = await getJson(
       `/api/v3/special/song?specialid=${encodeURIComponent(id)}&page=${page}&pagesize=${pageSize}&area_code=1`,
     )
     if (data?.status !== 1 && data?.errcode !== 0) {
       throw new Error(`kugou code ${data?.errcode}/${data?.status}`)
     }
-    const chunk = data?.data?.info || []
-    total = Number(data?.data?.total || 0) || total
+    const dataObj = data?.data as Record<string, unknown> | undefined
+    const chunk = (dataObj?.info as unknown[]) || []
+    total = Number(dataObj?.total || 0) || total
     all.push(...chunk)
+    if (opts?.onProgress) {
+      opts.onProgress({
+        index: all.length,
+        total: Number.isFinite(total) ? total : all.length,
+        title,
+      })
+    }
     if (!chunk.length || chunk.length < pageSize) break
     page += 1
   }
 
   const tracks: PlaylistTrackDraft[] = all
-    .map((s: any) => {
-      const hash = String(s.hash || s['320hash'] || '')
-      const split = splitKgFilename(s.filename || s.songname || '')
+    .map((s: unknown) => {
+      const song = (s || {}) as Record<string, unknown>
+      const hash = String(song.hash || song['320hash'] || '')
+      const split = splitKgFilename(String(song.filename || song.songname || ''))
       return {
         externalId: hash || undefined,
         title: split.title,
         artist: split.artist,
-        album: s.album_name || '',
-        duration: Number(s.duration || 0) || undefined,
+        album: (song.album_name as string) || '',
+        duration: Number(song.duration || 0) || undefined,
         platform: 'kg',
       } satisfies PlaylistTrackDraft
     })
@@ -466,49 +557,61 @@ async function parseKugouPlaylist(id: string, url: string): Promise<PlaylistDraf
  * 解析歌单链接：
  * - wy / tx / kg
  */
-export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
+export async function parsePlaylist(
+  url: string,
+  opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void },
+): Promise<PlaylistDraft> {
   const raw = url.trim()
   if (!raw) throw createError({ statusCode: 400, statusMessage: '请输入歌单链接' })
+  if (opts?.signal?.aborted) {
+    const err = new Error('The operation was aborted')
+    err.name = 'AbortError'
+    throw err
+  }
 
-  const resolved = await resolvePlaylistUrl(raw)
+  const resolved = await resolvePlaylistUrl(raw, opts)
   const haystack = `${raw}\n${resolved}`
 
   if (/y\.qq\.com|i\.y\.qq\.com|c\.y\.qq\.com/i.test(haystack)) {
     const qqId = extractQqPlaylistId(resolved) || extractQqPlaylistId(raw)
-    if (qqId) return await parseQqPlaylist(qqId, raw)
+    if (qqId) return await parseQqPlaylist(qqId, raw, opts)
   }
 
   if (/kugou\.com/i.test(haystack)) {
     const kgId = extractKugouPlaylistId(resolved) || extractKugouPlaylistId(raw)
-    if (kgId) return await parseKugouPlaylist(kgId, raw)
+    if (kgId) return await parseKugouPlaylist(kgId, raw, opts)
   }
 
   if (/music\.163\.com/i.test(haystack)) {
     const wyId = extractNeteasePlaylistId(resolved) || extractNeteasePlaylistId(raw)
-    if (wyId) return await parseNeteasePlaylist(wyId, raw)
+    if (wyId) return await parseNeteasePlaylist(wyId, raw, opts)
   }
 
   // 纯数字：先 wy → tx → kg
   if (/^\d{5,}$/.test(raw)) {
     try {
-      return await parseNeteasePlaylist(raw, raw)
-    } catch {
+      return await parseNeteasePlaylist(raw, raw, opts)
+    } catch (err: unknown) {
+      const e = err as { name?: string }
+      if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
       try {
-        return await parseQqPlaylist(raw, raw)
-      } catch {
-        return await parseKugouPlaylist(raw, raw)
+        return await parseQqPlaylist(raw, raw, opts)
+      } catch (err2: unknown) {
+        const e2 = err2 as { name?: string }
+        if (e2?.name === 'AbortError' || opts?.signal?.aborted) throw err2
+        return await parseKugouPlaylist(raw, raw, opts)
       }
     }
   }
 
   const qqId = extractQqPlaylistId(resolved) || extractQqPlaylistId(raw)
-  if (qqId && /qq\.com/i.test(haystack)) return await parseQqPlaylist(qqId, raw)
+  if (qqId && /qq\.com/i.test(haystack)) return await parseQqPlaylist(qqId, raw, opts)
 
   const kgId = extractKugouPlaylistId(resolved) || extractKugouPlaylistId(raw)
-  if (kgId && /kugou\.com/i.test(haystack)) return await parseKugouPlaylist(kgId, raw)
+  if (kgId && /kugou\.com/i.test(haystack)) return await parseKugouPlaylist(kgId, raw, opts)
 
   const wyId = extractNeteasePlaylistId(resolved) || extractNeteasePlaylistId(raw)
-  if (wyId) return await parseNeteasePlaylist(wyId, raw)
+  if (wyId) return await parseNeteasePlaylist(wyId, raw, opts)
 
   throw createError({
     statusCode: 400,
@@ -516,7 +619,11 @@ export async function parsePlaylist(url: string): Promise<PlaylistDraft> {
   })
 }
 
-async function parseNeteasePlaylist(id: string, url: string): Promise<PlaylistDraft> {
+async function parseNeteasePlaylist(
+  id: string,
+  url: string,
+  opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void },
+): Promise<PlaylistDraft> {
   // 移动端头 + n 放大；完整曲目 ID 在 trackIds，tracks 往往只有预览几首
   const api = `https://music.163.com/api/v6/playlist/detail?id=${id}&n=100000&s=0`
   const res = await fetchWithTimeout(api, {
@@ -524,27 +631,40 @@ async function parseNeteasePlaylist(id: string, url: string): Promise<PlaylistDr
       'User-Agent': WY_MOBILE_UA,
       Referer: 'https://music.163.com/m/',
     },
+    signal: opts?.signal,
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await res.json()
+  const data = await res.json() as Record<string, unknown>
   if (data?.code && data.code !== 200) {
     throw createError({
       statusCode: 502,
       statusMessage: `${platformLabel('wy')} 歌单接口失败(${data.code}): ${data.msg || data.message || 'unknown'}`,
     })
   }
-  const pl = data?.playlist
+  const pl = data?.playlist as Record<string, unknown> | undefined
   if (!pl) throw createError({ statusCode: 502, statusMessage: '歌单不存在或接口失败' })
 
-  const previewTracks: PlaylistTrackDraft[] = (pl.tracks || []).map(mapNeteaseSong)
-  const trackIds: string[] = (pl.trackIds || [])
-    .map((t: any) => String(t?.id ?? t))
+  const previewTracks: PlaylistTrackDraft[] = ((pl.tracks as unknown[]) || []).map(mapNeteaseSong)
+  const trackIds: string[] = ((pl.trackIds as unknown[]) || [])
+    .map((t: unknown) => {
+      const item = t as { id?: unknown } | undefined
+      return String(item?.id ?? t)
+    })
     .filter((x: string) => /^\d+$/.test(x))
 
   let tracks = previewTracks
+  const title = (pl.name as string) || `歌单 ${id}`
+  if (opts?.onProgress) {
+    opts.onProgress({
+      index: previewTracks.length,
+      total: trackIds.length > previewTracks.length ? trackIds.length : previewTracks.length,
+      title,
+    })
+  }
+
   // PC/Web 常见：tracks 仅几首，trackIds 才是完整列表（如「喜欢的音乐」）
   if (trackIds.length > previewTracks.length) {
-    tracks = await fetchNeteaseSongsByIds(trackIds)
+    tracks = await fetchNeteaseSongsByIds(trackIds, opts)
     if (!tracks.length && previewTracks.length) tracks = previewTracks
   }
 
@@ -554,7 +674,7 @@ async function parseNeteasePlaylist(id: string, url: string): Promise<PlaylistDr
 
   return {
     platform: 'wy',
-    title: pl.name || `歌单 ${id}`,
+    title,
     url,
     tracks,
   }
@@ -573,10 +693,18 @@ function mapNeteaseSong(s: any): PlaylistTrackDraft {
 }
 
 /** 按 trackIds 分批拉取歌曲详情（对齐移动端补全歌单） */
-async function fetchNeteaseSongsByIds(ids: string[]): Promise<PlaylistTrackDraft[]> {
+async function fetchNeteaseSongsByIds(
+  ids: string[],
+  opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void },
+): Promise<PlaylistTrackDraft[]> {
   const BATCH = 200
   const byId = new Map<string, PlaylistTrackDraft>()
   for (let i = 0; i < ids.length; i += BATCH) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     const batch = ids.slice(i, i + BATCH)
     const c = JSON.stringify(batch.map((sid) => ({ id: Number(sid) })))
     const api = `https://music.163.com/api/v3/song/detail?c=${encodeURIComponent(c)}`
@@ -585,15 +713,23 @@ async function fetchNeteaseSongsByIds(ids: string[]): Promise<PlaylistTrackDraft
         'User-Agent': WY_MOBILE_UA,
         Referer: 'https://music.163.com/',
       },
+      signal: opts?.signal,
     })
     if (!res.ok) throw new Error(`song/detail HTTP ${res.status}`)
-    const data = await res.json()
+    const data = await res.json() as Record<string, unknown>
     if (data?.code !== 200 || !Array.isArray(data.songs)) {
-      throw new Error(data?.msg || data?.message || 'song/detail 失败')
+      throw new Error(String(data?.msg || data?.message || 'song/detail 失败'))
     }
     for (const s of data.songs) {
       const row = mapNeteaseSong(s)
       if (row.externalId) byId.set(row.externalId, row)
+    }
+    if (opts?.onProgress) {
+      opts.onProgress({
+        index: Math.min(i + BATCH, ids.length),
+        total: ids.length,
+        title: '网易云歌单',
+      })
     }
   }
   // 保持歌单原有顺序
@@ -628,22 +764,45 @@ export type PlaylistMatchRow = {
 
 const CONFIRM_SCORE_THRESHOLD = 0.7
 
-/** 批量匹配曲目，低分/无命中标记 needsConfirm 供前端人工确认 */
+export type PlaylistMatchOptions = {
+  scoreThreshold?: number
+  concurrency?: number
+  signal?: AbortSignal
+  allowManualBypass?: boolean
+  onProgress?: (event: {
+    index: number
+    total: number
+    track: PlaylistTrackDraft
+    row: PlaylistMatchRow
+  }) => void | Promise<void>
+}
+
+/** 批量匹配曲目，支持并发、进度通知与中断信号 */
 export async function matchPlaylistTracks(
   tracks: PlaylistTrackDraft[],
-  opts?: { scoreThreshold?: number },
+  opts?: PlaylistMatchOptions,
 ): Promise<PlaylistMatchRow[]> {
   const threshold = opts?.scoreThreshold ?? CONFIRM_SCORE_THRESHOLD
-  const rows: PlaylistMatchRow[] = []
+  const concurrency = Math.max(1, Math.min(16, opts?.concurrency ?? 6))
+  const signal = opts?.signal
+  const rows: PlaylistMatchRow[] = new Array(tracks.length)
+  const total = tracks.length
 
-  for (let index = 0; index < tracks.length; index++) {
-    const track = tracks[index]!
+  const matchQueue = new PQueue({ concurrency })
+
+  const processSingleTrack = async (track: PlaylistTrackDraft, index: number): Promise<PlaylistMatchRow> => {
+    if (signal?.aborted) {
+      const err = new Error('Match operation aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+
     try {
-      if (track.musicInfo) {
-        rows.push({
+      if (track.musicInfo && opts?.allowManualBypass) {
+        const row: PlaylistMatchRow = {
           index,
           track,
-          method: 'manual',
+          method: (track.matchMethod as any) || 'manual',
           score: 1,
           needsConfirm: false,
           selected: {
@@ -655,11 +814,21 @@ export async function matchPlaylistTracks(
             musicInfo: track.musicInfo,
           },
           candidates: [],
-        })
-        continue
+        }
+        rows[index] = row
+        if (opts?.onProgress) {
+          await opts.onProgress({ index, total, track, row })
+        }
+        return row
       }
 
-      const candidates = await searchPlatform(track.platform, `${track.title} ${track.artist}`, 1)
+      const candidates = await searchPlatform(track.platform, `${track.title} ${track.artist}`, 1, { signal })
+      if (signal?.aborted) {
+        const err = new Error('Match operation aborted')
+        err.name = 'AbortError'
+        throw err
+      }
+
       const mapped = candidates.map((c) => ({
         externalId: c.externalId,
         title: c.title,
@@ -681,7 +850,7 @@ export async function matchPlaylistTracks(
       )
 
       const needsConfirm = !matched.selected || matched.score < threshold
-      rows.push({
+      const row: PlaylistMatchRow = {
         index,
         track,
         method: matched.selected ? matched.method : 'none',
@@ -706,9 +875,18 @@ export async function matchPlaylistTracks(
           score: c.score,
           musicInfo: c.musicInfo,
         })),
-      })
-    } catch (err: any) {
-      rows.push({
+      }
+      rows[index] = row
+      if (opts?.onProgress) {
+        await opts.onProgress({ index, total, track, row })
+      }
+      return row
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string }
+      if (e?.name === 'AbortError' || signal?.aborted) {
+        throw err
+      }
+      const row: PlaylistMatchRow = {
         index,
         track,
         method: 'none',
@@ -716,24 +894,67 @@ export async function matchPlaylistTracks(
         needsConfirm: true,
         selected: null,
         candidates: [],
-        error: err?.message || String(err),
-      })
+        error: e?.message || String(err),
+      }
+      rows[index] = row
+      if (opts?.onProgress) {
+        await opts.onProgress({ index, total, track, row })
+      }
+      return row
     }
   }
 
-  return rows
+  const tasks = tracks.map((t, idx) => () => processSingleTrack(t, idx))
+
+  try {
+    await matchQueue.addAll(tasks, { signal })
+  } catch (err: unknown) {
+    const e = err as { name?: string }
+    if (e?.name === 'AbortError' || signal?.aborted) {
+      matchQueue.clear()
+      return rows.filter((r) => Boolean(r))
+    }
+    throw err
+  }
+
+  return rows.filter((r) => Boolean(r))
+}
+
+export type MatchAndEnqueueOptions = {
+  quality?: string
+  downloadLyric?: boolean
+  lyricMode?: 'external' | 'embedded'
+  onlyMatched?: boolean
+  concurrency?: number
+  signal?: AbortSignal
+  onProgress?: (event: {
+    stage: 'parsing' | 'matching' | 'enqueuing'
+    index: number
+    total: number
+    title: string
+    ok?: boolean
+    error?: string
+  }) => void | Promise<void>
 }
 
 export async function matchAndEnqueuePlaylist(
   draft: PlaylistDraft,
-  opts?: { quality?: string; downloadLyric?: boolean; lyricMode?: 'external' | 'embedded'; onlyMatched?: boolean },
+  opts?: MatchAndEnqueueOptions,
 ) {
   // 入队前先探测下载目录可写，避免整批「成功 0」且无明确错误
   assertDownloadDirWritable(getSettings().downloadDir)
 
+  const signal = opts?.signal
+  if (signal?.aborted) {
+    const err = new Error('Operation aborted')
+    err.name = 'AbortError'
+    throw err
+  }
+
   const batchId = randomUUID()
-  const results: Array<{ title: string; ok: boolean; method?: string; error?: string; taskId?: string }> = []
-  const toEnqueue: Array<{
+  const total = draft.tracks.length
+  const results: Array<{ title: string; ok: boolean; method?: string; error?: string; taskId?: string }> = new Array(total)
+  const toEnqueueList: Array<{
     title: string
     artist: string
     album?: string
@@ -749,13 +970,20 @@ export async function matchAndEnqueuePlaylist(
     resultIndex: number
   }> = []
 
-  for (let i = 0; i < draft.tracks.length; i++) {
-    const track = draft.tracks[i]!
+  const concurrency = Math.max(1, Math.min(16, opts?.concurrency ?? 6))
+  const queue = new PQueue({ concurrency })
+  let finishedCount = 0
+
+  const processTrack = async (track: PlaylistTrackDraft, index: number) => {
+    if (signal?.aborted) {
+      const err = new Error('Operation aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     try {
-      // 已人工确认 / 预解析
       if (track.musicInfo) {
-        results.push({ title: track.title, ok: true, method: track.matchMethod || 'manual' })
-        toEnqueue.push({
+        results[index] = { title: track.title, ok: true, method: track.matchMethod || 'manual' }
+        toEnqueueList.push({
           title: track.title,
           artist: track.artist,
           album: track.album,
@@ -768,12 +996,28 @@ export async function matchAndEnqueuePlaylist(
           lyricMode: opts?.lyricMode,
           batchId,
           playlistUrl: draft.url,
-          resultIndex: results.length - 1,
+          resultIndex: index,
         })
-        continue
+        finishedCount++
+        if (opts?.onProgress) {
+          await opts.onProgress({
+            stage: 'matching',
+            index: finishedCount,
+            total,
+            title: track.title,
+            ok: true,
+          })
+        }
+        return
       }
 
-      const candidates = await searchPlatform(track.platform, `${track.title} ${track.artist}`, 1)
+      const candidates = await searchPlatform(track.platform, `${track.title} ${track.artist}`, 1, { signal })
+      if (signal?.aborted) {
+        const err = new Error('Operation aborted')
+        err.name = 'AbortError'
+        throw err
+      }
+
       const matched = matchTrack(
         {
           externalId: track.externalId,
@@ -796,13 +1040,24 @@ export async function matchAndEnqueuePlaylist(
       )
 
       if (!matched.selected) {
-        results.push({ title: track.title, ok: false, error: '未匹配到可下载条目' })
-        continue
+        results[index] = { title: track.title, ok: false, error: '未匹配到可下载条目' }
+        finishedCount++
+        if (opts?.onProgress) {
+          await opts.onProgress({
+            stage: 'matching',
+            index: finishedCount,
+            total,
+            title: track.title,
+            ok: false,
+            error: '未匹配到可下载条目',
+          })
+        }
+        return
       }
 
       const cand = matched.selected
-      results.push({ title: track.title, ok: true, method: matched.method })
-      toEnqueue.push({
+      results[index] = { title: track.title, ok: true, method: matched.method }
+      toEnqueueList.push({
         title: cand.title,
         artist: cand.artist,
         album: cand.album,
@@ -821,29 +1076,68 @@ export async function matchAndEnqueuePlaylist(
         lyricMode: opts?.lyricMode,
         batchId,
         playlistUrl: draft.url,
-        resultIndex: results.length - 1,
+        resultIndex: index,
       })
+      finishedCount++
+      if (opts?.onProgress) {
+        await opts.onProgress({
+          stage: 'matching',
+          index: finishedCount,
+          total,
+          title: track.title,
+          ok: true,
+        })
+      }
     } catch (err: unknown) {
-      const e = err as { message?: string }
-      results.push({ title: track.title, ok: false, error: e?.message || String(err) })
+      const e = err as { name?: string; message?: string }
+      if (e?.name === 'AbortError' || signal?.aborted) {
+        throw err
+      }
+      results[index] = { title: track.title, ok: false, error: e?.message || String(err) }
+      finishedCount++
+      if (opts?.onProgress) {
+        await opts.onProgress({
+          stage: 'matching',
+          index: finishedCount,
+          total,
+          title: track.title,
+          ok: false,
+          error: e?.message || String(err),
+        })
+      }
     }
+  }
+
+  const tasks = draft.tracks.map((t, idx) => () => processTrack(t, idx))
+  try {
+    await queue.addAll(tasks, { signal })
+  } catch (err: unknown) {
+    const e = err as { name?: string }
+    if (e?.name === 'AbortError' || signal?.aborted) {
+      queue.clear()
+      throw err
+    }
+    throw err
   }
 
   // 使用高性能分批事务批量入库，并静默单条 emitTask 以消除瞬时广播与 WAL 压力
-  const { ids } = batchEnqueueDownload(toEnqueue, { silent: true })
-  for (let j = 0; j < toEnqueue.length; j++) {
-    const item = toEnqueue[j]!
-    const res = results[item.resultIndex]
-    if (res && ids[j]) {
-      res.taskId = ids[j]
+  if (toEnqueueList.length > 0) {
+    const { ids } = batchEnqueueDownload(toEnqueueList, { silent: true })
+    for (let j = 0; j < toEnqueueList.length; j++) {
+      const item = toEnqueueList[j]!
+      const res = results[item.resultIndex]
+      if (res && ids[j]) {
+        res.taskId = ids[j]
+      }
     }
   }
 
+  const finalResults = results.filter(Boolean)
   return {
     batchId,
     playlistTitle: draft.title,
     total: draft.tracks.length,
-    enqueued: results.filter((r) => r.ok).length,
-    results,
+    enqueued: finalResults.filter((r) => r.ok).length,
+    results: finalResults,
   }
 }

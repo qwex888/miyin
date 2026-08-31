@@ -18,13 +18,14 @@ export type SearchTrack = {
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-async function fetchText(url: string, init?: RequestInit) {
+async function fetchText(url: string, init?: RequestInit, ms = 10000) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15000)
+  const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal
+  const timer = setTimeout(() => controller.abort(), ms)
   try {
     const res = await fetch(url, {
       ...init,
-      signal: controller.signal,
+      signal,
       headers: {
         'User-Agent': UA,
         ...(init?.headers || {}),
@@ -37,8 +38,8 @@ async function fetchText(url: string, init?: RequestInit) {
   }
 }
 
-async function fetchJson(url: string, init?: RequestInit) {
-  const text = await fetchText(url, init)
+async function fetchJson(url: string, init?: RequestInit, ms = 10000) {
+  const text = await fetchText(url, init, ms)
   return parseLooseJson(text)
 }
 
@@ -91,11 +92,10 @@ export function cleanArtist(raw: string) {
   return s || '未知'
 }
 
-async function searchWy(keyword: string, page: number): Promise<SearchTrack[]> {
+async function searchWy(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
   const offset = (page - 1) * 30
   const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&limit=30&offset=${offset}`
-  const data = await fetchJson(url, { headers: { Referer: 'https://music.163.com/' } })
-  const songs = data?.result?.songs || []
+  const data = await fetchJson(url, { headers: { Referer: 'https://music.163.com/' }, signal: opts?.signal })
   return songs.map((s: any) => {
     const id = String(s.id)
     return {
@@ -122,10 +122,9 @@ async function searchWy(keyword: string, page: number): Promise<SearchTrack[]> {
   })
 }
 
-async function searchKw(keyword: string, page: number): Promise<SearchTrack[]> {
+async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
   const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=music&client=kt&pn=${page - 1}&rn=30&rformat=json&encoding=utf8`
-  const data = await fetchJson(url)
-  const abs = data?.abslist || []
+  const data = await fetchJson(url, { signal: opts?.signal })
   return abs.map((s: any) => {
     const id = String(s.MUSICRID || s.DC_TARGETID || '').replace('MUSIC_', '')
     return {
@@ -151,10 +150,9 @@ async function searchKw(keyword: string, page: number): Promise<SearchTrack[]> {
   })
 }
 
-async function searchKg(keyword: string, page: number): Promise<SearchTrack[]> {
+async function searchKg(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
   const url = `https://complexsearch.kugou.com/v2/search/song?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=30&platform=WebFilter`
-  const data = await fetchJson(url)
-  const lists = data?.data?.lists || []
+  const data = await fetchJson(url, { signal: opts?.signal })
   return lists.map((s: any) => {
     const hash = String(s.FileHash || s.HQFileHash || '')
     return {
@@ -181,11 +179,10 @@ async function searchKg(keyword: string, page: number): Promise<SearchTrack[]> {
   })
 }
 
-async function searchTx(keyword: string, page: number): Promise<SearchTrack[]> {
+async function searchTx(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
   // tx 公开搜索（轻量；可能偶发失败）
   const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=30&format=json`
-  const data = await fetchJson(url, { headers: { Referer: 'https://y.qq.com/' } })
-  const list = data?.data?.song?.list || []
+  const data = await fetchJson(url, { headers: { Referer: 'https://y.qq.com/' }, signal: opts?.signal })
   return list.map((s: any) => {
     const mid = String(s.songmid || s.mid)
     return {
@@ -233,7 +230,7 @@ function formatIntervalFromSec(secRaw: number) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-const adapters: Record<string, (kw: string, page: number) => Promise<SearchTrack[]>> = {
+const adapters: Record<string, (kw: string, page: number, opts?: { signal?: AbortSignal }) => Promise<SearchTrack[]>> = {
   wy: searchWy,
   kw: searchKw,
   kg: searchKg,
@@ -249,7 +246,12 @@ export function clearSearchCache() {
   searchCache.clear()
 }
 
-export async function searchPlatform(platform: string, keyword: string, page = 1) {
+export async function searchPlatform(platform: string, keyword: string, page = 1, opts?: { signal?: AbortSignal }) {
+  if (opts?.signal?.aborted) {
+    const err = new Error('The operation was aborted')
+    err.name = 'AbortError'
+    throw err
+  }
   const fn = adapters[platform]
   if (!fn) throw createError({ statusCode: 400, statusMessage: `暂不支持平台: ${platform}` })
   if (!keyword.trim()) throw createError({ statusCode: 400, statusMessage: '请输入关键词' })
@@ -257,7 +259,7 @@ export async function searchPlatform(platform: string, keyword: string, page = 1
   const hit = searchCache.get(key)
   if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return hit.items
   try {
-    const items = await fn(keyword.trim(), page)
+    const items = await fn(keyword.trim(), page, opts)
     // 统一再清洗一遍
     for (const it of items) {
       it.artist = cleanArtist(it.artist)
