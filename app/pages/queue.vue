@@ -206,7 +206,24 @@ const statusMap = {
 const selectedCount = computed(() => selected.value.size)
 const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
 
+type ServerStats = {
+  total: number
+  completed: number
+  failed: number
+  running: number
+  queued: number
+  cancelled: number
+}
+const serverStats = ref<ServerStats | null>(null)
+
 const tabCounts = computed(() => {
+  if (serverStats.value) {
+    return {
+      running: serverStats.value.running + serverStats.value.queued,
+      completed: serverStats.value.completed,
+      failed: serverStats.value.failed + serverStats.value.cancelled,
+    }
+  }
   const counts = { running: 0, completed: 0, failed: 0 }
   for (const t of allItems.value) {
     if (statusMap.running.includes(t.status)) counts.running++
@@ -215,7 +232,6 @@ const tabCounts = computed(() => {
   }
   return counts
 })
-
 function formatSize(n: number | null | undefined) {
   if (n == null || n <= 0) return ''
   if (n < 1024) return `${n} B`
@@ -300,8 +316,12 @@ async function load(opts?: { silent?: boolean }) {
     loadingText.value = '加载队列中…'
   }
   try {
-    const res = await $fetch<{ items: Task[] }>('/api/downloads')
+    const [res, statsRes] = await Promise.all([
+      $fetch<{ items: Task[] }>('/api/downloads'),
+      $fetch<ServerStats>('/api/downloads/stats').catch(() => null),
+    ])
     allItems.value = res.items
+    if (statsRes) serverStats.value = statsRes
     applyFilter()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '加载队列失败'))

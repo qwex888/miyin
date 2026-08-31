@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS download_tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_download_tasks_status ON download_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_download_tasks_playlist_url ON download_tasks(playlist_url);
+CREATE INDEX IF NOT EXISTS idx_download_tasks_batch_id ON download_tasks(batch_id);
 `
 
 export function openDb(dataDir?: string) {
@@ -68,6 +72,11 @@ function migrateSchema(db: Database.Database) {
   if (!names.has('file_size')) {
     db.exec(`ALTER TABLE download_tasks ADD COLUMN file_size INTEGER`)
   }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_download_tasks_status ON download_tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_download_tasks_playlist_url ON download_tasks(playlist_url);
+    CREATE INDEX IF NOT EXISTS idx_download_tasks_batch_id ON download_tasks(batch_id);
+  `)
 }
 
 export function getDb() {

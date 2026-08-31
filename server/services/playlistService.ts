@@ -5,7 +5,7 @@ import { request as httpRequestPlain } from 'node:http'
 import { URL } from 'node:url'
 import { searchPlatform } from './platformSearch'
 import { matchTrack } from './trackMatcher'
-import { enqueueDownload } from './downloadQueue'
+import { enqueueDownload, batchEnqueueDownload } from './downloadQueue'
 import { getSettings } from './settingsService'
 import { assertDownloadDirWritable } from '../utils/downloadDir'
 
@@ -733,12 +733,29 @@ export async function matchAndEnqueuePlaylist(
 
   const batchId = randomUUID()
   const results: Array<{ title: string; ok: boolean; method?: string; error?: string; taskId?: string }> = []
+  const toEnqueue: Array<{
+    title: string
+    artist: string
+    album?: string
+    platform: string
+    quality?: string
+    musicInfo: Record<string, unknown>
+    externalId?: string
+    matchMethod?: string
+    downloadLyric?: boolean
+    lyricMode?: 'external' | 'embedded'
+    batchId?: string
+    playlistUrl?: string
+    resultIndex: number
+  }> = []
 
-  for (const track of draft.tracks) {
+  for (let i = 0; i < draft.tracks.length; i++) {
+    const track = draft.tracks[i]!
     try {
       // 已人工确认 / 预解析
       if (track.musicInfo) {
-        const task = enqueueDownload({
+        results.push({ title: track.title, ok: true, method: track.matchMethod || 'manual' })
+        toEnqueue.push({
           title: track.title,
           artist: track.artist,
           album: track.album,
@@ -751,8 +768,8 @@ export async function matchAndEnqueuePlaylist(
           lyricMode: opts?.lyricMode,
           batchId,
           playlistUrl: draft.url,
+          resultIndex: results.length - 1,
         })
-        results.push({ title: track.title, ok: true, method: track.matchMethod || 'manual', taskId: task.id })
         continue
       }
 
@@ -784,7 +801,8 @@ export async function matchAndEnqueuePlaylist(
       }
 
       const cand = matched.selected
-      const task = enqueueDownload({
+      results.push({ title: track.title, ok: true, method: matched.method })
+      toEnqueue.push({
         title: cand.title,
         artist: cand.artist,
         album: cand.album,
@@ -803,10 +821,21 @@ export async function matchAndEnqueuePlaylist(
         lyricMode: opts?.lyricMode,
         batchId,
         playlistUrl: draft.url,
+        resultIndex: results.length - 1,
       })
-      results.push({ title: track.title, ok: true, method: matched.method, taskId: task.id })
-    } catch (err: any) {
-      results.push({ title: track.title, ok: false, error: err?.message || String(err) })
+    } catch (err: unknown) {
+      const e = err as { message?: string }
+      results.push({ title: track.title, ok: false, error: e?.message || String(err) })
+    }
+  }
+
+  // 使用高性能分批事务批量入库，并静默单条 emitTask 以消除瞬时广播与 WAL 压力
+  const { ids } = batchEnqueueDownload(toEnqueue, { silent: true })
+  for (let j = 0; j < toEnqueue.length; j++) {
+    const item = toEnqueue[j]!
+    const res = results[item.resultIndex]
+    if (res && ids[j]) {
+      res.taskId = ids[j]
     }
   }
 

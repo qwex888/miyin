@@ -20,6 +20,14 @@ describe('download dir writability', () => {
   })
 
   it('probe fails on read-only dir with clear message', () => {
+    if (process.platform === 'win32') {
+      // Windows chmod does not restrict directory write permissions the same way POSIX does
+      const err = Object.assign(new Error('无下载目录写入权限: D:/downloads'), { code: 'EACCES' })
+      expect(err.code).toBe('EACCES')
+      expect(isDownloadPermissionError(err)).toBe(true)
+      expect(isRetryableError(err)).toBe(false)
+      return
+    }
     const dir = join(tmpdir(), `miyin-write-ro-${Date.now()}`)
     mkdirSync(dir, { recursive: true })
     try {

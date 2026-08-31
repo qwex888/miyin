@@ -154,27 +154,30 @@ export function isBenignSourceScriptError(reason: unknown): boolean {
   return /Cannot read propert(y|ies) of (undefined|null)/i.test(msg)
 }
 
-type RejectionBucket = { errors: Error[] }
+type RejectionBucket = { errors: Error[]; active: boolean }
 
 let rejectionGuardDepth = 0
 let rejectionGuardHandler: ((reason: unknown, promise: Promise<unknown>) => void) | null = null
-let rejectionGuardSaved: Array<(...args: any[]) => void> = []
+let rejectionGuardSaved: Array<(...args: unknown[]) => void> = []
 let rejectionGuardHoldTimer: NodeJS.Timeout | null = null
-const rejectionBuckets = new Set<RejectionBucket>()
+const activeRejectionBuckets = new Set<RejectionBucket>()
 
 function ensureRejectionGuard() {
   if (rejectionGuardHandler) return
-  rejectionGuardSaved = process.listeners('unhandledRejection').slice() as Array<(...args: any[]) => void>
+  rejectionGuardSaved = process.listeners('unhandledRejection').slice() as Array<(...args: unknown[]) => void>
   for (const l of rejectionGuardSaved) {
     process.removeListener('unhandledRejection', l)
   }
   rejectionGuardHandler = (reason: unknown, promise: Promise<unknown>) => {
     if (isBenignSourceScriptError(reason)) {
       const e = reason instanceof Error ? reason : new Error(String(reason))
-      for (const b of rejectionBuckets) b.errors.push(e)
+      for (const b of activeRejectionBuckets) {
+        if (b.active && b.errors.length < 50) {
+          b.errors.push(e)
+        }
+      }
       const kind = isBenignSourceNetworkError(reason) ? 'network error' : 'script error'
       emitSourceLog('warn', `${kind}:`, e.message)
-      // 已临时接管 unhandledRejection 监听，不再事后 catch（避免 PromiseRejectionHandledWarning）
       void promise
       return
     }
@@ -199,6 +202,7 @@ function teardownRejectionGuard() {
     }
   }
   rejectionGuardSaved = []
+  activeRejectionBuckets.clear()
 }
 
 /**
@@ -209,10 +213,10 @@ export function acquireSourceRejectionGuard(): {
   errors: Error[]
   release: () => void
 } {
-  const bucket: RejectionBucket = { errors: [] }
+  const bucket: RejectionBucket = { errors: [], active: true }
   ensureRejectionGuard()
   rejectionGuardDepth += 1
-  rejectionBuckets.add(bucket)
+  activeRejectionBuckets.add(bucket)
   if (rejectionGuardHoldTimer) {
     clearTimeout(rejectionGuardHoldTimer)
     rejectionGuardHoldTimer = null
@@ -225,7 +229,8 @@ export function acquireSourceRejectionGuard(): {
     release() {
       if (released) return
       released = true
-      rejectionBuckets.delete(bucket)
+      bucket.active = false
+      activeRejectionBuckets.delete(bucket)
       rejectionGuardDepth = Math.max(0, rejectionGuardDepth - 1)
       if (rejectionGuardDepth === 0) {
         teardownRejectionGuard()
@@ -252,7 +257,7 @@ export function resetSourceRejectionGuardForTests() {
     rejectionGuardHoldTimer = null
   }
   rejectionGuardDepth = 0
-  rejectionBuckets.clear()
+  activeRejectionBuckets.clear()
   teardownRejectionGuard()
 }
 
