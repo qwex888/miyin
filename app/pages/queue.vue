@@ -237,10 +237,6 @@ const selectedCount = computed(() => {
   return selected.value.size
 })
 
-const allLoadedSelected = computed(() => {
-  return items.value.length > 0 && selected.value.size === items.value.length
-})
-
 function formatSize(n: number | null | undefined) {
   if (n == null || n <= 0) return ''
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -358,6 +354,9 @@ async function loadMore() {
     const existingIds = new Set(items.value.map((t) => t.id))
     const uniqueNew = newItems.filter((t) => !existingIds.has(t.id))
     items.value = items.value.concat(uniqueNew)
+    if (selectAllState.value) {
+      for (const t of uniqueNew) selected.value.add(t.id)
+    }
     currentPage.value = nextPage
     hasMore.value = (res.totalPages ? nextPage < res.totalPages : newItems.length >= PAGE_SIZE)
   } catch {
@@ -413,27 +412,27 @@ function bindDownloadEvents() {
 }
 
 function toggleOne(id: string, checked: boolean) {
-  selectAllState.value = false
   const next = new Set(selected.value)
-  if (checked) next.add(id)
-  else next.delete(id)
+  if (checked) {
+    next.add(id)
+    if (items.value.length > 0 && next.size === currentTabTotal.value) {
+      selectAllState.value = true
+    }
+  } else {
+    next.delete(id)
+    selectAllState.value = false
+  }
   selected.value = next
 }
 
-function toggleAllCurrent() {
-  selectAllState.value = false
-  if (allLoadedSelected.value) {
-    selected.value = new Set()
-    return
+function toggleSelectAll() {
+  if (selectAllState.value || (items.value.length > 0 && selected.value.size === items.value.length)) {
+    clearSelection()
+  } else {
+    selectAllState.value = true
+    selected.value = new Set(items.value.map((t) => t.id))
   }
-  selected.value = new Set(items.value.map((t) => t.id))
 }
-
-function selectAllTabTasks() {
-  selectAllState.value = true
-  selected.value = new Set(items.value.map((t) => t.id))
-}
-
 function clearSelection() {
   selectAllState.value = false
   selected.value = new Set()
@@ -692,20 +691,14 @@ useRegisterPageRefresh(async () => {
 
     <div class="toolbar">
       <label class="check">
-        <input type="checkbox" :checked="allLoadedSelected || selectAllState" :disabled="!items.length" @change="toggleAllCurrent" />
-        <span>全选当前已加载 ({{ items.length }})</span>
+        <input
+          type="checkbox"
+          :checked="selectAllState || (items.length > 0 && selected.size === currentTabTotal)"
+          :disabled="!items.length"
+          @change="toggleSelectAll"
+        />
+        <span>全选{{ currentTabTotal > 0 ? ` (${currentTabTotal})` : '' }}</span>
       </label>
-
-      <button
-        v-if="items.length > 0 && currentTabTotal > items.length"
-        class="btn btn-ghost btn-sm"
-        type="button"
-        :class="{ active: selectAllState }"
-        @click="selectAllState ? clearSelection() : selectAllTabTasks()"
-      >
-        {{ selectAllState ? '取消全量选择' : `选择全部 ${currentTabTotal} 条` }}
-      </button>
-
       <template v-if="selectedCount">
         <template v-if="tab === 'running'">
           <button class="btn btn-danger btn-sm" type="button" :disabled="loading" @click="batchCancel">

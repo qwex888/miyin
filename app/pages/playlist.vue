@@ -392,6 +392,15 @@ async function enqueueMatched(rows: MatchRow[]) {
     loading.value = false
   }
 }
+function openEnqueueResult(res: EnqueueResultPayload) {
+  result.value = res
+  showResult.value = true
+  if (res.enqueued > 0) {
+    toast.success(`成功入队 ${res.enqueued} 首`)
+  } else {
+    toast.warning('未能入队任何曲目')
+  }
+}
 
 async function confirmAndEnqueue() {
   await enqueueMatched(matchRows.value)
