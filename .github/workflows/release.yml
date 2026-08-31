@@ -156,7 +156,7 @@ jobs:
           ref: ${{ needs.resolve.outputs.tag }}
 
       - name: Download FPK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: miyin-fpk
           path: dist
