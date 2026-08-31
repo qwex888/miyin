@@ -81,8 +81,11 @@ const activeAbortControllers = new Map<string, AbortController>()
 const activeProcessingTasks = new Set<string>()
 
 function getOrCreateDownloadQueue(concurrency: number): PQueue {
-  if (!downloadQueue || currentQueueConcurrency !== concurrency) {
+  if (!downloadQueue) {
     downloadQueue = new PQueue({ concurrency, autoStart: true })
+    currentQueueConcurrency = concurrency
+  } else if (downloadQueue.concurrency !== concurrency) {
+    downloadQueue.concurrency = concurrency
     currentQueueConcurrency = concurrency
   }
   return downloadQueue
@@ -1067,6 +1070,17 @@ export function kickWorker() {
 }
 
 export function startDownloadWorker() {
+  // 服务启动或重启时，重置非活跃的孤儿 running 任务回 queued，防止重启残留导致假运行
+  try {
+    getDb()
+      .prepare(
+        `UPDATE download_tasks SET status = 'queued', progress = 0, updated_at = ? WHERE status = 'running'`,
+      )
+      .run(nowIso())
+  } catch (e) {
+    console.warn('[downloadQueue] 重置启动前 running 任务失败:', e)
+  }
+
   if (loopTimer) return
   loopTimer = setInterval(() => {
     void tickWorker()
