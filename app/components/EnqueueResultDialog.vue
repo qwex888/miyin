@@ -110,6 +110,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <button class="btn btn-ghost" type="button" @click="onClose">继续导入</button>
           <button class="btn" type="button" @click="onViewQueue">查看队列</button>
         </div>
+      </div>
     </div>
   </Teleport>
 </template>
