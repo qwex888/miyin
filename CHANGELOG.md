@@ -9,6 +9,20 @@
 
 - CI：PR 策略检查（禁止二进制/超大文件、业务变更须更新 CHANGELOG）；PR 模板与按路径自动打 label
 - 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
+- 单元测试：新增 `tests/platformSearchVar.test.ts`，覆盖 `wy`、`kw`、`kg`、`tx` 全部 4 个音乐平台的搜索适配器变量声明与返回结构完备性测试
+- 队列与健康检查：暴露 `/api/health` 实时内存指标（`rssMb`、`heapUsedMb`、`heapTotalMb`）与 `/api/downloads/stats` 队列聚合统计接口
+
+### Changed
+
+- 歌单解析与匹配流程：歌单解析完成后保留原始曲目的 `musicInfo` 并在直接入库/匹配时标记 `matchMethod: 'parse'`，允许已具备完整音源元信息的曲目直接入队（`allowManualBypass`），避免对大歌单发起不必要的全量二次搜索
+- Benchmark 测试门禁：为高耗时及依赖外部网络的内存/吞吐量基准测试（`tests/realPlaylistMemory.test.ts`、`tests/cleanPlaylistBench.test.ts`、`tests/benchmarkMemory.test.ts`）添加 `describe.skipIf(!process.env.RUN_BENCHMARKS)`，确保默认 CI 与本地单元测试确定性且毫秒级快速通过
+- 下载并发与队列调度：采用 `p-queue` 接管任务并发与动态调度，绑定 `AbortController` 信号传递替代旧定时器循环与全局 cancel 集合，流式下载进度广播增加节流控制（250ms / 5% 变化量）
+
+### Fixed
+
+- 跨平台搜索适配器：修复 `server/services/platformSearch.ts` 中 `kw` (id)、`kg` (hash)、`tx` (mid) 的局部变量声明，防止由于变量未定义导致运行时抛出 `ReferenceError`
+- 音源沙箱异常治理：重构 `sourceRuntime.ts` 中的异步拒绝守卫（`rejectionGuard`），使用引用计数与局部桶（Bucket）监听器及时解绑与清理引用，消除未捕获 Promise 拒绝导致的 V8 GC Root 内存泄漏
+- 仓库治理：彻底移除仓库内提交的平台可执行二进制文件 `packaging/fnos/bin/fnpack.exe`
 
 ## [0.4.3] - 2026-08-28
 

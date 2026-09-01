@@ -149,6 +149,7 @@ async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSi
   const data = await fetchJson(url, { signal: opts?.signal })
   const abs = data?.abslist || []
   return abs.map((s: any) => {
+    const id = String(s.MUSICRID || s.DC_TARGETID || '').replace('MUSIC_', '')
     return {
       id: `kw:${id}`,
       externalId: id,
@@ -177,6 +178,7 @@ async function searchKg(keyword: string, page: number, opts?: { signal?: AbortSi
   const data = await fetchJson(url, { signal: opts?.signal })
   const lists = data?.data?.lists || []
   return lists.map((s: any) => {
+    const hash = String(s.FileHash || s.HQFileHash || '')
     return {
       id: `kg:${hash}`,
       externalId: hash,
@@ -207,6 +209,7 @@ async function searchTx(keyword: string, page: number, opts?: { signal?: AbortSi
   const data = await fetchJson(url, { headers: { Referer: 'https://y.qq.com/' }, signal: opts?.signal })
   const list = data?.data?.song?.list || []
   return list.map((s: any) => {
+    const mid = String(s.songmid || s.mid)
     return {
       id: `tx:${mid}`,
       externalId: mid,

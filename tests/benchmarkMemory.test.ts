@@ -43,7 +43,7 @@ function getMemMb() {
   }
 }
 
-describe('PR1 Performance & Memory Leak Verification Benchmark', () => {
+describe.skipIf(!process.env.RUN_BENCHMARKS)('PR1 Performance & Memory Leak Verification Benchmark', () => {
   it('verifies bounded heap memory after 300 sandboxed script loads and 500 queued task updates', async () => {
     const mem0 = getMemMb()
     console.log(`\n[Benchmark 起始基准] RSS: ${mem0.rss} MB | HeapUsed: ${mem0.heapUsed} MB | HeapTotal: ${mem0.heapTotal} MB`)

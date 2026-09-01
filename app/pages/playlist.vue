@@ -172,8 +172,8 @@ async function parseOnly() {
     )
     const tracks = (res.tracks || []).map((t: Track) => ({
       ...t,
-      musicInfo: undefined,
-      matchMethod: undefined,
+      musicInfo: t.musicInfo,
+      matchMethod: t.matchMethod || (t.musicInfo ? 'parse' : undefined),
     }))
     preview.value = {
       platform: res.platform,

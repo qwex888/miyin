@@ -38,7 +38,7 @@ function getMemMb() {
   }
 }
 
-describe('Real Playlist Parse & Import Memory Verification', () => {
+describe.skipIf(!process.env.RUN_BENCHMARKS)('Real Playlist Parse & Import Memory Verification', () => {
   it('parses real Netease playlist and imports tasks with bounded memory', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'miyin-playlist-bench-'))
     closeDb()

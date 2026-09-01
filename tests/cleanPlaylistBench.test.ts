@@ -38,7 +38,7 @@ function getMemMb() {
   }
 }
 
-describe('Clean Baseline Playlist Parse & Import Benchmark', () => {
+describe.skipIf(!process.env.RUN_BENCHMARKS)('Clean Baseline Playlist Parse & Import Benchmark', () => {
   it('measures exact parse and import metrics', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'miyin-bench-pr1-'))
     closeDb()
