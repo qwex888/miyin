@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- CI：PR 策略检查（禁止二进制/超大文件、业务变更须更新 CHANGELOG）；PR 模板与按路径自动打 label
+- 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
+
 ## [0.4.3] - 2026-08-28
 
 ### Added

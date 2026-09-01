@@ -1,0 +1,23 @@
+'area/frontend':
+  - changed-files:
+      - any-glob-to-any-file: 'app/**'
+
+'area/backend':
+  - changed-files:
+      - any-glob-to-any-file: 'server/**'
+
+'area/shared':
+  - changed-files:
+      - any-glob-to-any-file: 'shared/**'
+
+'area/fnos':
+  - changed-files:
+      - any-glob-to-any-file: 'packaging/fnos/**'
+
+'area/ci':
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
+
+'area/tests':
+  - changed-files:
+      - any-glob-to-any-file: 'tests/**'
