@@ -1,4 +1,4 @@
-import type { AppUpdateCheckResult, MiyinLatestManifest } from '#shared/appUpdate'
+import type { AppDeployMode, AppUpdateCheckResult, MiyinLatestManifest } from '#shared/appUpdate'
 
 const DISMISS_KEY = 'miyin-update-dismissed'
 const LAST_CHECK_KEY = 'miyin-update-last-check'
@@ -9,6 +9,7 @@ export function useAppUpdate() {
   const currentVersion = computed(() => String(config.public.appVersion || '0.0.0'))
   const hasUpdate = useState<boolean>('app-update:has', () => false)
   const latest = useState<MiyinLatestManifest | null>('app-update:latest', () => null)
+  const deployMode = useState<AppDeployMode>('app-update:deploy', () => 'other')
   const checking = useState<boolean>('app-update:checking', () => false)
   const dismissedVersion = useState<string | null>('app-update:dismissed', () => null)
   const dialogOpen = useState<boolean>('app-update:dialog', () => false)
@@ -54,6 +55,7 @@ export function useAppUpdate() {
       const res = await $fetch<AppUpdateCheckResult>('/api/app/update-check')
       hasUpdate.value = res.hasUpdate
       latest.value = res.latest
+      deployMode.value = res.deployMode || 'other'
       markChecked()
       return res
     } catch {
@@ -103,6 +105,7 @@ export function useAppUpdate() {
     currentVersion,
     hasUpdate,
     latest,
+    deployMode,
     checking,
     showBadge,
     dialogOpen,

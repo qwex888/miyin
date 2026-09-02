@@ -1,5 +1,6 @@
 import type { AppUpdateCheckResult, MiyinLatestManifest } from '#shared/appUpdate'
 import { isNewerVersion } from '#shared/appUpdate'
+import { getDeployMode } from '../../utils/deployRuntime'
 
 const MANIFEST_TIMEOUT_MS = 15_000
 
@@ -41,6 +42,7 @@ function normalizeManifest(raw: unknown): MiyinLatestManifest | null {
 
 export default defineEventHandler(async (): Promise<AppUpdateCheckResult> => {
   const current = currentVersion()
+  const deployMode = getDeployMode()
   const url = manifestUrl()
 
   const controller = new AbortController()
@@ -55,21 +57,22 @@ export default defineEventHandler(async (): Promise<AppUpdateCheckResult> => {
       redirect: 'follow',
     })
     if (!res.ok) {
-      return { current, hasUpdate: false, latest: null }
+      return { current, hasUpdate: false, latest: null, deployMode }
     }
     const raw = await res.json()
     const latest = normalizeManifest(raw)
     if (!latest) {
-      return { current, hasUpdate: false, latest: null }
+      return { current, hasUpdate: false, latest: null, deployMode }
     }
     const hasUpdate = isNewerVersion(latest.version, current)
     return {
       current,
       hasUpdate,
       latest: hasUpdate ? latest : null,
+      deployMode,
     }
   } catch {
-    return { current, hasUpdate: false, latest: null }
+    return { current, hasUpdate: false, latest: null, deployMode }
   } finally {
     clearTimeout(timer)
   }

@@ -32,18 +32,23 @@ function readEnvMap(file: string): Record<string, string> {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
     const m = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)='((?:\\'|[^'])*)'$/)
-    if (m) {
-      out[m[1]] = m[2].replace(/\\'/g, "'")
+    const quotedKey = m?.[1]
+    const quotedVal = m?.[2]
+    if (quotedKey !== undefined && quotedVal !== undefined) {
+      out[quotedKey] = quotedVal.replace(/\\'/g, "'")
       continue
     }
     const m2 = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
-    if (m2) {
-      let v = m2[2]
-      if ((v.startsWith("'") && v.endsWith("'")) || (v.startsWith('"') && v.endsWith('"'))) {
-        v = v.slice(1, -1)
-      }
-      out[m2[1]] = v
+    const key = m2?.[1]
+    let value = m2?.[2]
+    if (key === undefined || value === undefined) continue
+    if (
+      (value.startsWith("'") && value.endsWith("'")) ||
+      (value.startsWith('"') && value.endsWith('"'))
+    ) {
+      value = value.slice(1, -1)
     }
+    out[key] = value
   }
   return out
 }

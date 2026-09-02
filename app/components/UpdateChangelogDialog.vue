@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { AppDeployMode } from '#shared/appUpdate'
+
 const open = defineModel<boolean>('open', { default: false })
 
 const props = defineProps<{
@@ -7,13 +9,8 @@ const props = defineProps<{
     tag: string
     releasedAt: string
     changelog: string
-    downloads: {
-      releasePage: string
-      fpk?: string
-      dockerHub?: string
-      ghcr?: string
-    }
   } | null
+  deployMode?: AppDeployMode
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +23,12 @@ const releasedLabel = computed(() => {
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw.slice(0, 10)
   return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+})
+
+const upgradeHint = computed(() => {
+  if (props.deployMode === 'fnos') return '请静待新版推送。'
+  if (props.deployMode === 'docker') return 'Docker 安装请拉取新版本镜像并重启容器。'
+  return ''
 })
 
 function onClose() {
@@ -64,24 +67,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <pre class="changelog">{{ manifest.changelog }}</pre>
         </div>
 
-        <div v-if="manifest.downloads.fpk" class="downloads">
-          <a
-            :href="manifest.downloads.fpk"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="link"
-          >
-            下载 FPK 安装包
-          </a>
-          <a
-            :href="manifest.downloads.releasePage"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="link"
-          >
-            查看 GitHub Release
-          </a>
-        </div>
+        <p v-if="upgradeHint" class="hint">{{ upgradeHint }}</p>
 
         <div class="footer">
           <button class="btn btn-ghost" type="button" @click="onDismiss">稍后再说</button>
@@ -147,19 +133,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   white-space: pre-wrap;
   word-break: break-word;
 }
-.downloads {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
-  font-size: 14px;
-}
-.link {
-  color: var(--accent);
-  text-decoration: none;
-}
-.link:hover {
-  text-decoration: underline;
+.hint {
+  flex-shrink: 0;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius);
 }
 .footer {
   flex-shrink: 0;

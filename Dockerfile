@@ -18,7 +18,8 @@ ENV HOST=0.0.0.0 \
     PORT=18980 \
     NODE_ENV=production \
     DATA_DIR=/data \
-    DOWNLOAD_DIR=/downloads
+    DOWNLOAD_DIR=/downloads \
+    MIYIN_RUNTIME=docker
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
   && rm -rf /var/lib/apt/lists/*

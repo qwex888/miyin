@@ -12,10 +12,14 @@ export type MiyinLatestManifest = {
   }
 }
 
+/** 服务端检测到的安装形态（更新弹窗按此展示指引） */
+export type AppDeployMode = 'fnos' | 'docker' | 'other'
+
 export type AppUpdateCheckResult = {
   current: string
   hasUpdate: boolean
   latest: MiyinLatestManifest | null
+  deployMode: AppDeployMode
 }
 
 /** 解析 semver 核心段，pre-release 仅作同版本 tie-break（略简化） */

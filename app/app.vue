@@ -2,7 +2,7 @@
 const route = useRoute()
 const config = useRuntimeConfig()
 const pageSession = usePageSession()
-const { dialogOpen, latest, dismissUpdate } = useAppUpdate()
+const { dialogOpen, latest, deployMode, dismissUpdate } = useAppUpdate()
 
 useHead({
   title: () => config.public.appName,
@@ -47,6 +47,7 @@ useHead({
     <UpdateChangelogDialog
       v-model:open="dialogOpen"
       :manifest="latest"
+      :deploy-mode="deployMode"
       @dismiss="dismissUpdate"
     />
   </div>
