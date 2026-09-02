@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { getAuthToken, getSessionSecret, getDownloadDirEnv } from '../server/utils/runtimeEnv'
+import { getAuthToken, getAuthTokenFromEnv, getSessionSecret, getDownloadDirEnv } from '../server/utils/runtimeEnv'
 
 describe('runtimeEnv', () => {
   const prev = { ...process.env }
@@ -19,12 +19,13 @@ describe('runtimeEnv', () => {
 
   it('prefers AUTH_TOKEN over empty for open mode detection', () => {
     process.env.AUTH_TOKEN = ''
+    expect(getAuthTokenFromEnv()).toBe('')
     expect(getAuthToken()).toBe('')
   })
 
   it('reads AUTH_TOKEN when set by fnOS/Docker', () => {
     process.env.AUTH_TOKEN = 'secret-from-wizard'
-    expect(getAuthToken()).toBe('secret-from-wizard')
+    expect(getAuthTokenFromEnv()).toBe('secret-from-wizard')
   })
 
   it('reads DOWNLOAD_DIR from process env', () => {

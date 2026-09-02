@@ -1,13 +1,14 @@
 import { verifySession } from '../utils/crypto'
 import { isAuthRequired } from '../utils/authMode'
-import { getAuthToken, getSessionSecret } from '../utils/runtimeEnv'
+import { getSessionSecret } from '../utils/runtimeEnv'
+import { getEffectiveAuthToken } from '../services/authTokenService'
 
 export default defineEventHandler((event) => {
   const path = getRequestURL(event).pathname
   if (!path.startsWith('/api/')) return
   if (path === '/api/auth/login' || path === '/api/auth/me' || path === '/api/health') return
 
-  const authToken = getAuthToken()
+  const authToken = getEffectiveAuthToken()
   if (!isAuthRequired(authToken)) {
     event.context.auth = { open: true }
     return

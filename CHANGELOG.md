@@ -14,6 +14,7 @@
 
 ### Added
 
+- 设置页分为「基础设置 / 访问口令」两个 Tab；访问口令修改（须校验当前口令，可留空切回开放模式）立即生效，无需重启。优先级：应用内设置 > Docker `-e` / 飞牛安装向导；FPK 同步写入 `miyin.env`
 - 搜索页支持「单曲 / 专辑」切换：可按专辑名搜索（wy / tx / kw / kg），进入专辑详情后多选或一键整专入队下载
 - 单曲详情增加「查看专辑」跳转（携带 albumId 时直达整专曲目列表）
 - 专辑/歌单批量入队结果弹窗：失败项按原因分组汇总，支持重试失败项；查看队列时可按 batchId 筛选同批任务
@@ -27,6 +28,8 @@
 
 ### Changed
 
+- 登录页与设置页口令输入统一使用显/隐眼睛图标组件
+- 登录页访问口令输入框支持显/隐切换（右侧眼睛图标）
 - 歌单解析与匹配流程：歌单解析提取曲目基础元信息并保留原始 `musicInfo`，入队与下载支持快速直通通道（`allowManualBypass`）或匹配引擎跨平台解析，避免大歌单发起不必要的强制全量二次搜索
 - Benchmark 测试门禁：为高耗时及依赖外部网络的内存/吞吐量基准测试（`tests/realPlaylistMemory.test.ts`、`tests/cleanPlaylistBench.test.ts`、`tests/benchmarkMemory.test.ts`）添加 `describe.skipIf(!process.env.RUN_BENCHMARKS)`，确保默认 CI 与本地单元测试确定性且毫秒级快速通过
 - 下载并发与队列调度：采用 `p-queue` 接管任务并发与动态调度，绑定 `AbortController` 信号传递替代旧定时器循环与全局 cancel 集合，流式下载进度广播增加节流控制（250ms / 5% 变化量）

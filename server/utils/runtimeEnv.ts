@@ -20,11 +20,19 @@ function firstDefinedString(...candidates: Array<string | undefined | null>): st
   return undefined
 }
 
-/** 访问口令；空字符串 = 开放模式 */
-export function getAuthToken(): string {
+/** 访问口令（仅环境变量 / runtimeConfig，不含应用内覆盖） */
+export function getAuthTokenFromEnv(): string {
   const fromEnv = firstDefinedString(process.env.AUTH_TOKEN, process.env.NUXT_AUTH_TOKEN)
   if (fromEnv !== undefined) return fromEnv
   return String(runtimeConfigSafe().authToken ?? '')
+}
+
+/**
+ * @deprecated 请优先使用 authTokenService.getEffectiveAuthToken（含设置页覆盖）。
+ * 保留为环境变量读取别名，避免旧调用在无库上下文出错。
+ */
+export function getAuthToken(): string {
+  return getAuthTokenFromEnv()
 }
 
 export function getSessionSecret(): string {

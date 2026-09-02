@@ -2,6 +2,7 @@
 definePageMeta({ middleware: [], keepalive: false })
 
 const token = ref('')
+const showToken = ref(false)
 const error = ref('')
 const loading = ref(false)
 const { login } = useAuth()
@@ -59,13 +60,25 @@ async function submit() {
       </div>
       <label class="field">
         <span class="label">访问口令</span>
-        <input
-          v-model="token"
-          class="input"
-          type="password"
-          placeholder="Token"
-          autocomplete="current-password"
-        />
+        <div class="token-wrap">
+          <input
+            v-model="token"
+            class="input token-input"
+            :type="showToken ? 'text' : 'password'"
+            placeholder="Token"
+            autocomplete="current-password"
+          />
+          <button
+            class="token-toggle"
+            type="button"
+            :title="showToken ? '隐藏口令' : '显示口令'"
+            :aria-label="showToken ? '隐藏口令' : '显示口令'"
+            :aria-pressed="showToken"
+            @click="showToken = !showToken"
+          >
+            <PasswordVisibilityIcon :visible="showToken" />
+          </button>
+        </div>
       </label>
       <p v-if="error" class="err">{{ error }}</p>
       <button class="btn" type="submit" :disabled="loading || !token">
@@ -108,6 +121,40 @@ async function submit() {
 .label {
   font-size: 13px;
   font-weight: 500;
+}
+.token-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.token-input {
+  width: 100%;
+  padding-right: 42px;
+}
+.token-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.token-toggle:hover {
+  color: var(--text);
+  background: hsl(var(--secondary));
+}
+.token-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .err {
   color: var(--danger);

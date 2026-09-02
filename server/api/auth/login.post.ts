@@ -1,10 +1,11 @@
 import { createSessionToken, SESSION_MAX_AGE_SEC, safeEqualString } from '~~/server/utils/crypto'
 import { isAuthRequired } from '~~/server/utils/authMode'
-import { getAuthToken, getSessionSecret } from '~~/server/utils/runtimeEnv'
+import { getSessionSecret } from '~~/server/utils/runtimeEnv'
+import { getEffectiveAuthToken } from '~~/server/services/authTokenService'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ token?: string }>(event)
-  const expected = getAuthToken()
+  const expected = getEffectiveAuthToken()
 
   if (!isAuthRequired(expected)) {
     throw createError({ statusCode: 400, statusMessage: '当前未启用口令鉴权' })
