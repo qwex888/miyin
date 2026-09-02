@@ -80,7 +80,8 @@ let lastFinishedAt: number | null = null
 let idleShrinkTimer: NodeJS.Timeout | null = null
 const activeAbortControllers = new Map<string, AbortController>()
 const activeProcessingTasks = new Set<string>()
-
+const inFlightQueueTaskIds = new Set<string>()
+let isTicking = false
 function scheduleIdleShrinkDb() {
   if (idleShrinkTimer) clearTimeout(idleShrinkTimer)
   idleShrinkTimer = setTimeout(() => {
@@ -801,14 +802,19 @@ async function downloadFile(
 }
 
 async function processTask(task: DownloadTaskRow) {
-  const settings = getSettings()
   const abortController = new AbortController()
   activeAbortControllers.set(task.id, abortController)
   activeProcessingTasks.add(task.id)
-  updateTask(task.id, { status: 'running', progress: 0.01, error: null })
+
   let filePath: string | null = null
   let lyricPath: string | null = null
+  const settings = getSettings()
   try {
+    const current = getTask(task.id)
+    if (!current || current.status === 'cancelled' || abortController.signal.aborted) {
+      return
+    }
+    updateTask(task.id, { status: 'running', progress: 0.01, error: null })
     ensureDownloadDirWritable(settings.downloadDir)
     const musicInfo = JSON.parse(task.music_info_json || '{}') as Record<string, unknown>
     const { url, quality } = await resolveUrl(task, task.quality || settings.defaultQuality)
@@ -999,6 +1005,7 @@ async function processTask(task: DownloadTaskRow) {
       })
     }
   } finally {
+    inFlightQueueTaskIds.delete(task.id)
     activeAbortControllers.delete(task.id)
     activeProcessingTasks.delete(task.id)
     lastEmitTimeByTaskId.delete(task.id)
@@ -1039,50 +1046,54 @@ function alignFileExtension(filePath: string, base: string, dir: string): string
 }
 
 export async function tickWorker() {
-  const settings = getSettings()
-  const queue = getOrCreateDownloadQueue(settings.concurrency)
-  const availableSlots = settings.concurrency - (queue.pending + queue.size)
-  if (availableSlots <= 0) return
+  if (isTicking) return
+  isTicking = true
+  try {
+    const settings = getSettings()
+    const queue = getOrCreateDownloadQueue(settings.concurrency)
+    const availableSlots = settings.concurrency - (queue.pending + queue.size)
+    if (availableSlots <= 0) return
 
-  for (let i = 0; i < availableSlots; i++) {
-    const waitMs = msUntilCanStartTask({
-      now: Date.now(),
-      lastStartedAt,
-      lastFinishedAt,
-      taskStartIntervalSec: settings.taskStartIntervalSec,
-      downloadIntervalSec: settings.downloadIntervalSec,
-    })
-    if (waitMs > 0) {
-      scheduleKickAfter(waitMs)
-      break
-    }
-
-    const next = getDb()
-      .prepare(`SELECT * FROM download_tasks WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`)
-      .get() as DownloadTaskRow | undefined
-    if (!next) break
-
-    const changed = getDb()
-      .prepare(`UPDATE download_tasks SET status='running', updated_at=? WHERE id=? AND status='queued'`)
-      .run(nowIso(), next.id)
-    if (changed.changes === 0) break
-
-    const fresh = getTask(next.id)!
-    lastStartedAt = Date.now()
-    void queue.add(async () => {
-      try {
-        await processTask({ ...fresh, status: 'queued' })
-      } finally {
-        lastFinishedAt = Date.now()
-        if (activeProcessingTasks.size === 0) {
-          scheduleIdleShrinkDb()
-        }
-        kickWorker()
+    for (let i = 0; i < availableSlots; i++) {
+      const waitMs = msUntilCanStartTask({
+        now: Date.now(),
+        lastStartedAt,
+        lastFinishedAt,
+        taskStartIntervalSec: settings.taskStartIntervalSec,
+        downloadIntervalSec: settings.downloadIntervalSec,
+      })
+      if (waitMs > 0) {
+        scheduleKickAfter(waitMs)
+        break
       }
-    })
-  }
-  if (availableSlots > 0 && activeProcessingTasks.size === 0 && (!downloadQueue || downloadQueue.pending === 0)) {
-    scheduleIdleShrinkDb()
+
+      const placeholders = Array.from(inFlightQueueTaskIds).map(() => '?').join(',')
+      const notInClause = inFlightQueueTaskIds.size > 0 ? `AND id NOT IN (${placeholders})` : ''
+      const next = getDb()
+        .prepare(`SELECT * FROM download_tasks WHERE status = 'queued' ${notInClause} ORDER BY created_at ASC LIMIT 1`)
+        .get(...Array.from(inFlightQueueTaskIds)) as DownloadTaskRow | undefined
+      if (!next) break
+
+      inFlightQueueTaskIds.add(next.id)
+      lastStartedAt = Date.now()
+      void queue.add(async () => {
+        try {
+          await processTask(next)
+        } finally {
+          inFlightQueueTaskIds.delete(next.id)
+          lastFinishedAt = Date.now()
+          if (activeProcessingTasks.size === 0) {
+            scheduleIdleShrinkDb()
+          }
+          kickWorker()
+        }
+      })
+    }
+    if (availableSlots > 0 && activeProcessingTasks.size === 0 && (!downloadQueue || downloadQueue.pending === 0)) {
+      scheduleIdleShrinkDb()
+    }
+  } finally {
+    isTicking = false
   }
 }
 
