@@ -19,21 +19,25 @@ type Task = {
 
 const tab = ref<'running' | 'completed' | 'failed'>('running')
 const items = ref<Task[]>([])
-const allItems = ref<Task[]>([])
 const selected = ref<Set<string>>(new Set())
+const selectAllState = ref(false) // 是否勾选了当前 Tab 下的所有任务（跨页/全量）
 const loading = ref(false)
 const loadingText = ref('加载中…')
 const pageLoading = ref(false)
+const loadingMore = ref(false)
+const hasMore = ref(false)
+const currentPage = ref(1)
+const PAGE_SIZE = 50
 const toast = useToast()
 const deleteDialogOpen = ref(false)
 const deleteDialogTitle = ref('确认删除')
 const deleteDialogDesc = ref('')
 let deletePending: null | { mode: 'one'; task: Task } | { mode: 'batch' } = null
 
-const { notifyChanged, onSnapshot, onTask, cache, startWatching } = useDownloadEvents()
+const { notifyChanged, onSnapshot, onTask, startWatching } = useDownloadEvents()
 let offSnapshot: (() => void) | null = null
 let offTask: (() => void) | null = null
-
+let latestSseSnapshot: Task[] = []
 type SourceRowLite = {
   id: string
   name: string
@@ -203,22 +207,38 @@ const statusMap = {
   failed: ['failed', 'cancelled'],
 }
 
-const selectedCount = computed(() => selected.value.size)
-const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
+type ServerStats = {
+  total: number
+  completed: number
+  failed: number
+  running: number
+  queued: number
+  cancelled: number
+}
+const serverStats = ref<ServerStats | null>(null)
 
 const tabCounts = computed(() => {
-  const counts = { running: 0, completed: 0, failed: 0 }
-  for (const t of allItems.value) {
-    if (statusMap.running.includes(t.status)) counts.running++
-    else if (statusMap.completed.includes(t.status)) counts.completed++
-    else if (statusMap.failed.includes(t.status)) counts.failed++
+  if (serverStats.value) {
+    return {
+      running: serverStats.value.running + serverStats.value.queued,
+      completed: serverStats.value.completed,
+      failed: serverStats.value.failed + serverStats.value.cancelled,
+    }
   }
-  return counts
+  return { running: 0, completed: 0, failed: 0 }
+})
+
+const currentTabTotal = computed(() => {
+  return tabCounts.value[tab.value] || 0
+})
+
+const selectedCount = computed(() => {
+  if (selectAllState.value) return currentTabTotal.value
+  return selected.value.size
 })
 
 function formatSize(n: number | null | undefined) {
   if (n == null || n <= 0) return ''
-  if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
@@ -261,52 +281,121 @@ function statusText(s: string) {
   return statusLabel[s] || s
 }
 
-function applyFilter() {
-  const allow = statusMap[tab.value]
-  let list = allItems.value.filter((t) => allow.includes(t.status))
-  if (tab.value === 'running') {
-    // 下载中（有进度）在前，排队等待在后；同组内进度高的靠前
-    list = [...list].sort((a, b) => {
-      const rank = (t: Task) => (t.status === 'running' ? 0 : t.status === 'queued' ? 1 : 2)
-      const ra = rank(a)
-      const rb = rank(b)
-      if (ra !== rb) return ra - rb
-      if (ra === 0) return (b.progress || 0) - (a.progress || 0)
-      return 0
-    })
-  }
-  items.value = list
-  const ids = new Set(items.value.map((t) => t.id))
-  selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
+function sortRunningItems(list: Task[]): Task[] {
+  return [...list].sort((a, b) => {
+    const rank = (t: Task) => (t.status === 'running' ? 0 : t.status === 'queued' ? 1 : 2)
+    const ra = rank(a)
+    const rb = rank(b)
+    if (ra !== rb) return ra - rb
+    if (ra === 0) return (b.progress || 0) - (a.progress || 0)
+    return 0
+  })
 }
 
-function upsert(task: Task) {
-  if ((task as any).status === 'deleted') {
-    allItems.value = allItems.value.filter((t) => t.id !== task.id)
-    selected.value.delete(task.id)
-    selected.value = new Set(selected.value)
-    applyFilter()
-    return
+async function fetchStats() {
+  try {
+    const res = await $fetch<ServerStats>('/api/downloads/stats')
+    if (res) serverStats.value = res
+  } catch {
+    /* ignore */
   }
-  const idx = allItems.value.findIndex((t) => t.id === task.id)
-  if (idx >= 0) allItems.value[idx] = task
-  else allItems.value.unshift(task)
-  applyFilter()
 }
 
-async function load(opts?: { silent?: boolean }) {
-  if (!opts?.silent) {
+async function loadTabItems(opts?: { silent?: boolean; reset?: boolean }) {
+  if (opts?.reset) {
+    currentPage.value = 1
+    selected.value = new Set()
+    selectAllState.value = false
+  }
+  if (!opts?.silent && opts?.reset) {
     pageLoading.value = true
     loadingText.value = '加载队列中…'
   }
   try {
-    const res = await $fetch<{ items: Task[] }>('/api/downloads')
-    allItems.value = res.items
-    applyFilter()
+    const [res] = await Promise.all([
+      $fetch<{ items: Task[]; total?: number; totalPages?: number }>('/api/downloads', {
+        params: {
+          tab: tab.value,
+          page: currentPage.value,
+          pageSize: PAGE_SIZE,
+        },
+      }),
+      fetchStats(),
+    ])
+    const newItems = res.items || []
+    if (currentPage.value === 1) {
+      items.value = tab.value === 'running' ? sortRunningItems(newItems) : newItems
+    } else {
+      const existingIds = new Set(items.value.map((t) => t.id))
+      const uniqueNew = newItems.filter((t) => !existingIds.has(t.id))
+      items.value = items.value.concat(uniqueNew)
+    }
+    hasMore.value = (res.totalPages ? currentPage.value < res.totalPages : newItems.length >= PAGE_SIZE)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '加载队列失败'))
   } finally {
-    if (!opts?.silent) pageLoading.value = false
+    if (!opts?.silent && opts?.reset) pageLoading.value = false
+  }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  loadingMore.value = true
+  try {
+    const nextPage = currentPage.value + 1
+    const res = await $fetch<{ items: Task[]; total?: number; totalPages?: number }>('/api/downloads', {
+      params: {
+        tab: tab.value,
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+      },
+    })
+    const newItems = res.items || []
+    const existingIds = new Set(items.value.map((t) => t.id))
+    const uniqueNew = newItems.filter((t) => !existingIds.has(t.id))
+    items.value = items.value.concat(uniqueNew)
+    if (selectAllState.value) {
+      for (const t of uniqueNew) selected.value.add(t.id)
+    }
+    currentPage.value = nextPage
+    hasMore.value = (res.totalPages ? nextPage < res.totalPages : newItems.length >= PAGE_SIZE)
+  } catch {
+    /* ignore */
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+function upsert(task: Task) {
+  void fetchStats()
+  const isDeleted = (task as any).status === 'deleted'
+  const allowed = statusMap[tab.value]
+  const belongsToTab = !isDeleted && allowed.includes(task.status)
+
+  const idx = items.value.findIndex((t) => t.id === task.id)
+  if (isDeleted) {
+    if (idx >= 0) items.value.splice(idx, 1)
+    selected.value.delete(task.id)
+    selected.value = new Set(selected.value)
+    return
+  }
+
+  if (belongsToTab) {
+    if (idx >= 0) {
+      items.value[idx] = task
+    } else if (tab.value === 'running') {
+      items.value.push(task)
+    }
+    if (tab.value === 'running') {
+      items.value = sortRunningItems(items.value)
+    }
+  } else {
+    // 状态变迁（例如 running -> completed），从当前 tab 列表中移除
+    if (idx >= 0) {
+      items.value.splice(idx, 1)
+      selected.value.delete(task.id)
+      selected.value = new Set(selected.value)
+    }
   }
 }
 
@@ -314,8 +403,8 @@ function bindDownloadEvents() {
   offSnapshot?.()
   offTask?.()
   offSnapshot = onSnapshot((list) => {
-    allItems.value = list as Task[]
-    applyFilter()
+    latestSseSnapshot = list as Task[]
+    void fetchStats()
   })
   offTask = onTask((task) => {
     upsert(task as Task)
@@ -324,26 +413,37 @@ function bindDownloadEvents() {
 
 function toggleOne(id: string, checked: boolean) {
   const next = new Set(selected.value)
-  if (checked) next.add(id)
-  else next.delete(id)
+  if (checked) {
+    next.add(id)
+    if (items.value.length > 0 && next.size === currentTabTotal.value) {
+      selectAllState.value = true
+    }
+  } else {
+    next.delete(id)
+    selectAllState.value = false
+  }
   selected.value = next
 }
 
-function toggleAll() {
-  if (allSelected.value) {
-    selected.value = new Set()
-    return
+function toggleSelectAll() {
+  if (selectAllState.value || (items.value.length > 0 && selected.value.size === items.value.length)) {
+    clearSelection()
+  } else {
+    selectAllState.value = true
+    selected.value = new Set(items.value.map((t) => t.id))
   }
-  selected.value = new Set(items.value.map((t) => t.id))
+}
+function clearSelection() {
+  selectAllState.value = false
+  selected.value = new Set()
 }
 
 async function cancel(t: Task) {
   if (!confirm(`确认取消任务「${t.title}」？未完成文件将被删除；若已完成也会删除本地文件。`)) return
   try {
     await $fetch(`/api/downloads/${t.id}`, { method: 'DELETE' })
-    await load({ silent: true })
+    await loadTabItems({ silent: true })
     notifyChanged()
-    toast.success('已取消任务')
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '取消失败'))
   }
@@ -352,8 +452,7 @@ async function cancel(t: Task) {
 async function retry(t: Task) {
   try {
     await $fetch(`/api/downloads/${t.id}/retry`, { method: 'POST', body: { resetAttempts: true } })
-    // 留在失败 tab，刷新后该条会从当前列表消失
-    await load({ silent: true })
+    await loadTabItems({ silent: true })
     notifyChanged()
     toast.success('已重新入队')
   } catch (e: unknown) {
@@ -388,7 +487,7 @@ async function onQualityConfirm(payload: { quality: string }) {
     })
     qualityDialogOpen.value = false
     qualityPending = null
-    await load({ silent: true })
+    await loadTabItems({ silent: true })
     notifyChanged()
     toast.success(`已切换至音质「${qualityLabel(res.quality)}」并重试`)
   } catch (e: unknown) {
@@ -414,7 +513,9 @@ async function batchDelete() {
   const label = tab.value === 'failed' ? '失败/取消' : '已完成'
   deletePending = { mode: 'batch' }
   deleteDialogTitle.value = '批量删除'
-  deleteDialogDesc.value = `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
+  deleteDialogDesc.value = selectAllState.value
+    ? `确定删除当前分类下全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
+    : `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
   deleteDialogOpen.value = true
 }
 
@@ -439,16 +540,20 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
     } else {
       const res = await $fetch<{ deleted: number }>('/api/downloads/batch-delete', {
         method: 'POST',
-        body: { ids: [...selected.value], deleteLocalFiles: payload.deleteLocalFiles },
+        body: {
+          ids: selectAllState.value ? undefined : [...selected.value],
+          allWithTab: selectAllState.value ? (tab.value as 'completed' | 'failed') : undefined,
+          deleteLocalFiles: payload.deleteLocalFiles,
+        },
       })
-      selected.value = new Set()
+      clearSelection()
       toast.success(
         `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
       )
     }
     deleteDialogOpen.value = false
     deletePending = null
-    await load({ silent: true })
+    await loadTabItems({ silent: true, reset: true })
     notifyChanged()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '删除失败'))
@@ -464,18 +569,23 @@ function onDeleteCancel() {
 async function batchCancel() {
   if (!selectedCount.value) return
   const n = selectedCount.value
-  if (!confirm(`确认取消选中的 ${n} 个下载任务？将删除未完成（及竞态已完成）的本地文件。`))
-    return
+  const msg = selectAllState.value
+    ? `确认取消所有进行中的 ${n} 个下载任务？将删除未完成（及竞态已完成）的本地文件。`
+    : `确认取消选中的 ${n} 个下载任务？将删除未完成（及竞态已完成）的本地文件。`
+  if (!confirm(msg)) return
   loading.value = true
   loadingText.value = '批量取消中…'
   try {
     await $fetch('/api/downloads/batch-cancel', {
       method: 'POST',
-      body: { ids: [...selected.value] },
+      body: {
+        ids: selectAllState.value ? undefined : [...selected.value],
+        allWithTab: selectAllState.value ? 'running' : undefined,
+      },
     })
-    selected.value = new Set()
+    clearSelection()
     toast.success(`已批量取消 ${n} 个任务`)
-    await load({ silent: true })
+    await loadTabItems({ silent: true, reset: true })
     notifyChanged()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '批量取消失败'))
@@ -487,17 +597,24 @@ async function batchCancel() {
 async function batchRetry() {
   if (!selectedCount.value) return
   const n = selectedCount.value
-  if (!confirm(`确认重试选中的 ${n} 个失败任务？`)) return
+  const msg = selectAllState.value
+    ? `确认重试当前所有 ${n} 个失败任务？`
+    : `确认重试选中的 ${n} 个失败任务？`
+  if (!confirm(msg)) return
   loading.value = true
   loadingText.value = '批量重试中…'
   try {
     await $fetch('/api/downloads/batch-retry', {
       method: 'POST',
-      body: { ids: [...selected.value], resetAttempts: true },
+      body: {
+        ids: selectAllState.value ? undefined : [...selected.value],
+        allWithTab: selectAllState.value ? 'failed' : undefined,
+        resetAttempts: true,
+      },
     })
-    selected.value = new Set()
+    clearSelection()
     toast.success(`已批量重试 ${n} 个任务`)
-    await load({ silent: true })
+    await loadTabItems({ silent: true, reset: true })
     notifyChanged()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '批量重试失败'))
@@ -511,8 +628,7 @@ async function batchSwitchSource() {
 }
 
 watch(tab, () => {
-  selected.value = new Set()
-  applyFilter()
+  void loadTabItems({ reset: true })
 })
 const showPageLoading = computed(() => pageLoading.value || loading.value)
 
@@ -521,12 +637,7 @@ onMounted(() => {
   startWatching()
   bindDownloadEvents()
   void loadSourceNames()
-  if (cache.value.length) {
-    allItems.value = cache.value as Task[]
-    applyFilter()
-  } else {
-    void load()
-  }
+  void loadTabItems({ reset: true })
 })
 onBeforeUnmount(() => {
   offSnapshot?.()
@@ -536,11 +647,12 @@ onBeforeUnmount(() => {
 })
 onActivated(() => {
   bindDownloadEvents()
+  void loadTabItems({ reset: true, silent: true })
 })
 
 useRegisterPageRefresh(async () => {
   await loadSourceNames()
-  await load()
+  await loadTabItems({ reset: true })
 })
 </script>
 
@@ -555,7 +667,12 @@ useRegisterPageRefresh(async () => {
         @click="tab = 'running'"
       >
         进行中
-        <span class="tab-count">({{ tabCounts.running }})</span>
+        <span class="tab-count">
+          ({{ tabCounts.running }})
+          <small v-if="serverStats && serverStats.running > 0" class="tab-sub-count">
+            [{{ serverStats.running }}下载/{{ serverStats.queued }}排队]
+          </small>
+        </span>
       </button>
       <button
         type="button"
@@ -574,8 +691,13 @@ useRegisterPageRefresh(async () => {
 
     <div class="toolbar">
       <label class="check">
-        <input type="checkbox" :checked="allSelected" :disabled="!items.length" @change="toggleAll" />
-        全选当前
+        <input
+          type="checkbox"
+          :checked="selectAllState || (items.length > 0 && selected.size === currentTabTotal)"
+          :disabled="!items.length"
+          @change="toggleSelectAll"
+        />
+        <span>全选{{ currentTabTotal > 0 ? ` (${currentTabTotal})` : '' }}</span>
       </label>
       <template v-if="selectedCount">
         <template v-if="tab === 'running'">
@@ -592,7 +714,7 @@ useRegisterPageRefresh(async () => {
           <button class="btn btn-sm" type="button" :disabled="loading" @click="batchRetry">
             批量重试（{{ selectedCount }}）
           </button>
-          <button class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="batchSwitchSource">
+          <button v-if="!selectAllState" class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="batchSwitchSource">
             批量换源（{{ selectedCount }}）
           </button>
           <button class="btn btn-danger btn-sm" type="button" :disabled="loading" @click="batchDelete">
@@ -609,7 +731,10 @@ useRegisterPageRefresh(async () => {
         :items="items"
         :estimate-size="120"
         :dynamic="true"
+        :has-more="hasMore"
+        :loading="loadingMore"
         fill
+        @load-more="loadMore"
       >
         <template #default="{ item: t }">
           <div class="task">
@@ -773,6 +898,12 @@ useRegisterPageRefresh(async () => {
 .tab-count {
   font-variant-numeric: tabular-nums;
   font-weight: 400;
+}
+.tab-sub-count {
+  font-size: 11px;
+  color: var(--accent);
+  margin-left: 2px;
+  font-weight: 500;
 }
 .tab.active {
   color: var(--accent);

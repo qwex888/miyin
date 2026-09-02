@@ -28,6 +28,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   close: []
   viewQueue: []
+  retryFailed: [failedItems: EnqueueResultItem[]]
 }>()
 
 const items = computed(() => props.result?.results || [])
@@ -43,10 +44,15 @@ const summaryText = computed(() => {
   if (enqueued === 0) return `未能入队（0 / ${total}）`
   return `成功入队 ${enqueued} / ${total} 首` + (failCount.value ? `，失败 ${failCount.value}` : '')
 })
-
 function onClose() {
   open.value = false
   emit('close')
+}
+
+function onRetryFailed() {
+  const failed = items.value.filter((it) => !it.ok)
+  open.value = false
+  emit('retryFailed', failed)
 }
 
 async function onViewQueue() {
@@ -54,7 +60,6 @@ async function onViewQueue() {
   emit('viewQueue')
   await navigateTo('/queue')
 }
-
 function onKeydown(e: KeyboardEvent) {
   if (!open.value) return
   if (e.key === 'Escape') onClose()
@@ -94,6 +99,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         </div>
 
         <div class="footer">
+          <button
+            v-if="failCount > 0"
+            class="btn btn-retry"
+            type="button"
+            @click="onRetryFailed"
+          >
+            重试失败曲目 ({{ failCount }})
+          </button>
           <button class="btn btn-ghost" type="button" @click="onClose">继续导入</button>
           <button class="btn" type="button" @click="onViewQueue">查看队列</button>
         </div>
@@ -215,7 +228,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   font-size: 13px;
   border-radius: 8px;
 }
-
+.footer .btn-retry {
+  background: var(--accent, #6366f1);
+  color: #fff;
+  border: none;
+}
+.footer .btn-retry:hover {
+  opacity: 0.9;
+}
 @media (max-width: 768px) {
   .overlay {
     align-items: flex-end;

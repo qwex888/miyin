@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, writeFileSync, renameSync, unlinkSync, copyFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, renameSync, unlinkSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -123,21 +123,34 @@ async function resolveCoverJpeg(coverUrl: string, dir: string): Promise<string |
 
 /** FLAC 是否含 METADATA_BLOCK_PICTURE（type=6） */
 export function flacHasPictureBlock(filePath: string): boolean {
+  let fd: number | null = null
   try {
-    const buf = readFileSync(filePath)
-    if (buf.toString('ascii', 0, 4) !== 'fLaC' || buf.length < 8) return false
-    let off = 4
-    for (let i = 0; i < 64 && off + 4 <= buf.length; i++) {
-      const header = buf[off]!
-      const isLast = (header & 0x80) !== 0
-      const type = header & 0x7f
-      const size = (buf[off + 1]! << 16) | (buf[off + 2]! << 8) | buf[off + 3]!
+    fd = openSync(filePath, 'r')
+    const headerBuf = Buffer.allocUnsafe(4)
+    if (readSync(fd, headerBuf, 0, 4, 0) < 4 || headerBuf.toString('ascii') !== 'fLaC') {
+      return false
+    }
+    let pos = 4
+    const blockHead = Buffer.allocUnsafe(4)
+    for (let i = 0; i < 64; i++) {
+      if (readSync(fd, blockHead, 0, 4, pos) < 4) break
+      const isLast = (blockHead[0]! & 0x80) !== 0
+      const type = blockHead[0]! & 0x7f
+      const size = (blockHead[1]! << 16) | (blockHead[2]! << 8) | blockHead[3]!
       if (type === 6 && size > 0) return true
-      off += 4 + size
+      pos += 4 + size
       if (isLast) break
     }
   } catch {
     /* ignore */
+  } finally {
+    if (fd != null) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* ignore */
+      }
+    }
   }
   return false
 }

@@ -47,11 +47,16 @@ function startProxy(socketPath, port) {
 
   const proxy = createHttpServer((req, res) => {
     const headers = { ...req.headers, host: `${HOST}:${port}` }
+    // 网关可能发送带 /app/miyin 前缀的路径，也可能由反代剥离；Nitro 配置了 baseURL=/app/miyin/
+    let targetPath = req.url || '/'
+    if (!targetPath.startsWith('/app/miyin') && !targetPath.startsWith('/app/miyin/')) {
+      targetPath = `/app/miyin${targetPath.startsWith('/') ? '' : '/'}${targetPath}`
+    }
     const upstream = httpRequest(
       {
         host: HOST,
         port,
-        path: req.url,
+        path: targetPath,
         method: req.method,
         headers,
       },

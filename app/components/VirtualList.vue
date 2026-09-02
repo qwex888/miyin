@@ -11,6 +11,12 @@ const props = withDefaults(
     fill?: boolean
     /** 按内容实测行高（路径换行、多行文案时用） */
     dynamic?: boolean
+    /** 触底加载阈值（像素） */
+    threshold?: number
+    /** 是否还有更多数据 */
+    hasMore?: boolean
+    /** 加载中状态，避免重复触发 */
+    loading?: boolean
   }>(),
   {
     estimateSize: 64,
@@ -18,8 +24,15 @@ const props = withDefaults(
     maxHeight: '480px',
     fill: false,
     dynamic: false,
+    threshold: 200,
+    hasMore: false,
+    loading: false,
   },
 )
+
+const emit = defineEmits<{
+  (e: 'loadMore'): void
+}>()
 
 const parentRef = ref<HTMLElement | null>(null)
 
@@ -62,6 +75,15 @@ function remeasureViewport() {
   el.scrollTop = top
 }
 
+function onScroll(e: Event) {
+  if (!props.hasMore || props.loading) return
+  const target = e.target as HTMLElement
+  if (!target) return
+  const { scrollTop, scrollHeight, clientHeight } = target
+  if (scrollHeight - (scrollTop + clientHeight) <= props.threshold) {
+    emit('loadMore')
+  }
+}
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
@@ -95,6 +117,7 @@ onBeforeUnmount(() => {
     class="virtual-list"
     :class="{ fill, dynamic }"
     :style="fill ? { height: '100%', maxHeight: '100%' } : { maxHeight }"
+    @scroll="onScroll"
   >
     <div class="virtual-inner" :style="{ height: `${totalSize}px` }">
       <div

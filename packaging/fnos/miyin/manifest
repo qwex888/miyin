@@ -12,4 +12,4 @@ desktop_uidir=ui
 desktop_applaunchname=miyin.main
 install_dep_apps=nodejs_v22
 ctl_stop=true
-changelog=修复下载队列 API；飞牛自定义目录应用内一键授权；os_min 1.2.0401。
+changelog=优化下载队列调度引擎(p-queue)与内存治理；修复sourceRuntime错误上下文泄漏；新增歌单聚合统计与分页支持；大歌单分批事务入库削峰。

@@ -95,11 +95,12 @@ CUSTOM_DOWNLOAD_DIR='${shellEscape(customDir)}'
 
 /** downloadDir 是否被 paths 中某一项覆盖（相等或为其子路径） */
 export function pathCoveredByRoots(downloadDir: string, roots: string[]) {
-  const target = resolve(downloadDir)
+  const normalize = (p: string) => resolve(p).replace(/\\/g, '/').replace(/\/+$/, '')
+  const target = normalize(downloadDir)
   for (const root of roots) {
     if (!root) continue
-    const r = resolve(root)
-    if (target === r || target.startsWith(r.endsWith('/') ? r : `${r}/`)) return true
+    const r = normalize(root)
+    if (target === r || target.startsWith(`${r}/`)) return true
   }
   return false
 }
