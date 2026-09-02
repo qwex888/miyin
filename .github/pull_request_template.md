@@ -14,7 +14,7 @@
 ## 检查清单
 
 - [ ] 已本地运行 `pnpm test` 与 `pnpm build`
-- [ ] 已更新根目录 `CHANGELOG.md`（`[Unreleased]` 下；无用户可见变化可写「无」并说明）
+- [ ] 已更新根目录 `CHANGELOG.md`（`[Unreleased]` 用户可见摘要；可选 @用户/PR #；**不写 commit SHA**）
 - [ ] 未提交 `.env`、密钥、`*.fpk`、`packaging/fnos/bin/*.exe` 等二进制
 - [ ] 若改 `manifest` / `os_min_version` / `api-scope`，已核对向导与 packaging 文案
 - [ ] **来自 fork 的首个 PR**：已在 GitHub Checks 区点击 **Approve and run workflows**（否则 CI 不会跑）

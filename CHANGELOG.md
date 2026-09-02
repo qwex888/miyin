@@ -3,10 +3,18 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+**书写约定**
+
+- `[Unreleased]`：只写**用户可感知**的摘要（Added / Changed / Fixed / Removed）；一条 PR 或一项变更一行。
+- 可选标注贡献者：`(@GitHub用户名)` 或 `(PR #编号)`；**不要写 commit SHA**（避免 amend/rebase/squash 后失效）。
+- 发版时 `pnpm release` / GitHub Release 会从 **git tag 区间**自动生成 commit 溯源，附在 Release Notes，不写入 CHANGELOG 正文。
+- 追加条目：`pnpm changelog:add <类型> "描述" [--author 用户名] [--pr 编号]`
+
 ## [Unreleased]
 
 ### Added
 
+- CHANGELOG 与 Release 分工：`[Unreleased]` 仅用户可感知摘要；发版 Release Notes 自动附 git tag 区间 commit 溯源；新增 `pnpm changelog:add` 辅助写入
 - CI：PR 策略检查（禁止二进制/超大文件、业务变更须更新 CHANGELOG）；PR 模板与按路径自动打 label
 - 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
 - 单元测试：新增 `tests/platformSearchVar.test.ts`，覆盖 `wy`、`kw`、`kg`、`tx` 全部 4 个音乐平台的搜索适配器变量声明与返回结构完备性测试
@@ -26,6 +34,7 @@
 - 跨平台搜索适配器：修复 `server/services/platformSearch.ts` 中 `kw` (id)、`kg` (hash)、`tx` (mid) 的局部变量声明，防止由于变量未定义导致运行时抛出 `ReferenceError`
 - 音源沙箱异常治理：重构 `sourceRuntime.ts` 中的异步拒绝守卫（`rejectionGuard`），使用引用计数与局部桶（Bucket）监听器及时解绑与清理引用，消除未捕获 Promise 拒绝导致的 V8 GC Root 内存泄漏
 - 仓库治理：彻底移除仓库内提交的平台可执行二进制文件 `packaging/fnos/bin/fnpack.exe`
+
 ## [0.4.3] - 2026-08-28
 
 ### Added

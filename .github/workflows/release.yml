@@ -164,7 +164,8 @@ jobs:
       - name: Generate release notes
         run: |
           chmod +x scripts/generate-release-notes.sh
-          ./scripts/generate-release-notes.sh "${{ needs.resolve.outputs.version }}" release_notes.md
+          PREV=$(git describe --tags --abbrev=0 "${{ needs.resolve.outputs.tag }}^" 2>/dev/null | sed 's/^v//' || true)
+          ./scripts/generate-release-notes.sh "${{ needs.resolve.outputs.version }}" release_notes.md "${PREV}"
           {
             echo
             echo "---"

@@ -168,9 +168,9 @@ path.write_text(text_body + "\n".join(links) + "\n", encoding="utf-8")
 print(f"CHANGELOG → [{new_ver}]")
 PY
 
-chmod +x scripts/generate-release-notes.sh
-./scripts/generate-release-notes.sh "$NEW_VERSION" release_notes.md
-info "已生成 release_notes.md"
+chmod +x scripts/generate-release-notes.sh scripts/changelog-entry.sh
+./scripts/generate-release-notes.sh "$NEW_VERSION" release_notes.md "$CURRENT"
+info "已生成 release_notes.md（含 ${TAG} 相对 v${CURRENT} 的 commit 溯源）"
 
 if [ "$SKIP_CHECKS" != "1" ]; then
   info "运行本地检测 (pnpm test && pnpm build)…"

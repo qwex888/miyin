@@ -53,4 +53,14 @@ if [ "$needs_changelog" = true ] && [ "$changelog_touched" = false ]; then
   fail "变更 app/、server/ 或 shared/ 时须更新根目录 CHANGELOG.md（写在 [Unreleased] 下）"
 fi
 
+# [Unreleased] 正文只写用户可感知摘要；commit SHA 由发版 Release Notes 从 git tag 生成
+if [ "$changelog_touched" = true ]; then
+  while IFS= read -r line; do
+    if echo "$line" | grep -q '/commit/'; then
+      echo "⚠ CHANGELOG [Unreleased] 不宜写 commit 链接（发版时 Release Notes 会自动附 commit 列表）" >&2
+      echo "  $line" >&2
+    fi
+  done < <(git diff "${DIFF_RANGE}" -- CHANGELOG.md 2>/dev/null | grep '^+- ' || true)
+fi
+
 echo "✓ PR 策略检查通过"
