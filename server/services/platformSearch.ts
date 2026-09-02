@@ -6,6 +6,7 @@ export type SearchTrack = {
   title: string
   artist: string
   album: string
+  albumId?: string
   duration: number
   platform: string
   cover?: string
@@ -126,6 +127,7 @@ async function searchWy(keyword: string, page: number, opts?: { signal?: AbortSi
       title: s.name || '未知',
       artist: artistsJoin(s.ar || s.artists),
       album: s.al?.name || s.album?.name || '',
+      albumId: s.al?.id ? String(s.al.id) : undefined,
       duration: Math.round((s.dt || s.duration || 0) / 1000),
       platform: 'wy',
       cover: s.al?.picUrl || s.album?.picUrl,
@@ -156,6 +158,7 @@ async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSi
       title: decode(s.NAME || s.SONGNAME),
       artist: decode(s.ARTIST),
       album: decode(s.ALBUM),
+      albumId: s.ALBUMID ? String(s.ALBUMID).replace(/^ALBUM_/, '') : undefined,
       duration: Number(s.DURATION || 0),
       platform: 'kw',
       cover: s.web_albumpic_short ? `https://img2.kuwo.cn/star/albumcover/${s.web_albumpic_short}` : undefined,
@@ -185,6 +188,7 @@ async function searchKg(keyword: string, page: number, opts?: { signal?: AbortSi
       title: s.SongName || s.OriSongName || '未知',
       artist: s.SingerName || artistsJoin(s.Singers, 'name'),
       album: s.AlbumName || '',
+      albumId: s.AlbumID ? String(s.AlbumID) : undefined,
       duration: Number(s.Duration || 0),
       platform: 'kg',
       cover: s.Image?.replace('{size}', '240'),
@@ -216,6 +220,7 @@ async function searchTx(keyword: string, page: number, opts?: { signal?: AbortSi
       title: s.songname || s.name || '未知',
       artist: artistsJoin(s.singer),
       album: s.albumname || '',
+      albumId: s.albummid ? String(s.albummid) : undefined,
       duration: Number(s.interval || 0),
       platform: 'tx',
       cover: s.albummid ? `https://y.qq.com/music/photo_new/T002R300x300M000${s.albummid}.jpg` : undefined,

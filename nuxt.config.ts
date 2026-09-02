@@ -16,6 +16,9 @@ export default defineNuxtConfig({
       htmlAttrs: {
         lang: 'zh-CN',
       },
+      // 禁止双指缩放（H5）
+      viewport:
+        'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: `${normalizedBase}favicon.svg` },
         { rel: 'apple-touch-icon', href: `${normalizedBase}logo-192.png` },

@@ -15,7 +15,14 @@ type Task = {
   file_path: string | null
   lyric_path: string | null
   file_size: number | null
+  batch_id?: string | null
 }
+
+const route = useRoute()
+const batchFilter = computed(() => {
+  const v = route.query.batchId
+  return typeof v === 'string' && v.trim() ? v.trim() : ''
+})
 
 const tab = ref<'running' | 'completed' | 'failed'>('running')
 const items = ref<Task[]>([])
@@ -188,7 +195,7 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
     }
     switchDialogOpen.value = false
     switchPending = null
-    await load({ silent: true })
+    await loadTabItems({ silent: true })
     notifyChanged()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '换源失败'))
@@ -236,6 +243,10 @@ const selectedCount = computed(() => {
   if (selectAllState.value) return currentTabTotal.value
   return selected.value.size
 })
+
+function clearBatchFilter() {
+  void navigateTo({ path: '/queue', query: {} })
+}
 
 function formatSize(n: number | null | undefined) {
   if (n == null || n <= 0) return ''
@@ -292,9 +303,20 @@ function sortRunningItems(list: Task[]): Task[] {
   })
 }
 
+function downloadListParams(page: number) {
+  const params: Record<string, string | number> = {
+    tab: tab.value,
+    page,
+    pageSize: PAGE_SIZE,
+  }
+  if (batchFilter.value) params.batch_id = batchFilter.value
+  return params
+}
+
 async function fetchStats() {
   try {
-    const res = await $fetch<ServerStats>('/api/downloads/stats')
+    const params = batchFilter.value ? { batch_id: batchFilter.value } : undefined
+    const res = await $fetch<ServerStats>('/api/downloads/stats', { params })
     if (res) serverStats.value = res
   } catch {
     /* ignore */
@@ -314,11 +336,7 @@ async function loadTabItems(opts?: { silent?: boolean; reset?: boolean }) {
   try {
     const [res] = await Promise.all([
       $fetch<{ items: Task[]; total?: number; totalPages?: number }>('/api/downloads', {
-        params: {
-          tab: tab.value,
-          page: currentPage.value,
-          pageSize: PAGE_SIZE,
-        },
+        params: downloadListParams(currentPage.value),
       }),
       fetchStats(),
     ])
@@ -344,11 +362,7 @@ async function loadMore() {
   try {
     const nextPage = currentPage.value + 1
     const res = await $fetch<{ items: Task[]; total?: number; totalPages?: number }>('/api/downloads', {
-      params: {
-        tab: tab.value,
-        page: nextPage,
-        pageSize: PAGE_SIZE,
-      },
+      params: downloadListParams(nextPage),
     })
     const newItems = res.items || []
     const existingIds = new Set(items.value.map((t) => t.id))
@@ -370,7 +384,8 @@ function upsert(task: Task) {
   void fetchStats()
   const isDeleted = (task as any).status === 'deleted'
   const allowed = statusMap[tab.value]
-  const belongsToTab = !isDeleted && allowed.includes(task.status)
+  const belongsToBatch = !batchFilter.value || task.batch_id === batchFilter.value
+  const belongsToTab = !isDeleted && belongsToBatch && allowed.includes(task.status)
 
   const idx = items.value.findIndex((t) => t.id === task.id)
   if (isDeleted) {
@@ -630,6 +645,11 @@ async function batchSwitchSource() {
 watch(tab, () => {
   void loadTabItems({ reset: true })
 })
+watch(batchFilter, () => {
+  selected.value = new Set()
+  selectAllState.value = false
+  void loadTabItems({ reset: true })
+})
 const showPageLoading = computed(() => pageLoading.value || loading.value)
 
 onMounted(() => {
@@ -688,6 +708,11 @@ useRegisterPageRefresh(async () => {
         <span class="tab-count">({{ tabCounts.failed }})</span>
       </button>
     </div>
+
+    <p v-if="batchFilter" class="batch-filter-bar">
+      当前仅显示本批入队任务
+      <button class="link-btn" type="button" @click="clearBatchFilter">显示全部</button>
+    </p>
 
     <div class="toolbar">
       <label class="check">
@@ -876,6 +901,27 @@ useRegisterPageRefresh(async () => {
   padding-top: 16px;
   padding-bottom: 16px;
   box-sizing: border-box;
+}
+.batch-filter-bar {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.link-btn {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  text-decoration: underline;
 }
 .tabs {
   display: flex;

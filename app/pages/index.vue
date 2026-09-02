@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { SEARCH_PLATFORM_ORDER, platformLabel } from '~/utils/mediaLabels'
+import {
+  DOWNLOAD_QUALITY_OPTIONS,
+  SEARCH_PLATFORM_ORDER,
+  platformLabel,
+  type DownloadQuality,
+} from '~/utils/mediaLabels'
+import type { EnqueueResultPayload } from '~/components/EnqueueResultDialog.vue'
+import type { AlbumDetailData } from '~/components/AlbumDetailPanel.vue'
+import type { SearchAlbumItem } from '~/components/AlbumResultList.vue'
 
 type Track = {
   id: string
@@ -7,6 +15,7 @@ type Track = {
   title: string
   artist: string
   album: string
+  albumId?: string
   duration: number
   platform: string
   cover?: string
@@ -14,29 +23,60 @@ type Track = {
   musicInfo: Record<string, any>
 }
 
+type PlatformTab = {
+  id: string
+  label: string
+  sourceCount: number
+  albumCapable?: boolean
+}
+
 const keyword = ref('')
+const searchType = ref<'song' | 'album'>('song')
+const view = ref<'results' | 'albumDetail'>('results')
 const platform = ref('wy')
-const platforms = ref<Array<{ id: string; label: string; sourceCount: number }>>(
+const platforms = ref<PlatformTab[]>(
   SEARCH_PLATFORM_ORDER.map((id) => ({ id, label: platformLabel(id), sourceCount: 0 })),
 )
 const items = ref<Track[]>([])
+const albumItems = ref<SearchAlbumItem[]>([])
 const selected = ref<Track | null>(null)
+const selectedAlbum = ref<SearchAlbumItem | null>(null)
+const albumDetail = ref<AlbumDetailData | null>(null)
 const loading = ref(false)
-const quality = ref('highest')
+const loadingText = ref('搜索中…')
+const quality = ref<DownloadQuality>('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
 const { play, current, playing, toggle, stop } = usePlayer()
 const toast = useToast()
 const detailSheetOpen = ref(false)
 const downloading = ref(false)
+const enqueueResult = ref<EnqueueResultPayload | null>(null)
+const showEnqueueResult = ref(false)
 const {
   showHomeBanner,
   refresh: refreshFnOsAuth,
   dismissBanner,
 } = useFnOsDirAuth()
 const route = useRoute()
-/** KeepAlive + Teleport：离开首页时不得继续盖住其它页 */
 const showFnOsAuthDialog = computed(() => showHomeBanner.value && route.path === '/')
+
+const searchPlaceholder = computed(() =>
+  searchType.value === 'album' ? '搜索专辑名 / 歌手' : '搜索歌曲 / 歌手',
+)
+
+const currentPlatformAlbumCapable = computed(() => {
+  const p = platforms.value.find((x) => x.id === platform.value)
+  return p?.albumCapable !== false
+})
+
+function ensureAlbumPlatform() {
+  const cur = platforms.value.find((x) => x.id === platform.value)
+  if (searchType.value === 'album' && cur && !cur.albumCapable) {
+    const fallback = platforms.value.find((x) => x.albumCapable) || platforms.value[0]
+    if (fallback) platform.value = fallback.id
+  }
+}
 
 function selectTrack(t: Track) {
   selected.value = t
@@ -62,8 +102,8 @@ async function loadLyricDefaults() {
     }>('/api/settings')
     withLyric.value = s.downloadLyric
     lyricMode.value = s.lyricMode || 'external'
-    if (['highest', 'flac24bit', 'flac', '320k', '128k'].includes(s.defaultQuality)) {
-      quality.value = s.defaultQuality
+    if (DOWNLOAD_QUALITY_OPTIONS.some((o) => o.id === s.defaultQuality)) {
+      quality.value = s.defaultQuality as DownloadQuality
     }
   } catch {
     /* ignore */
@@ -86,35 +126,69 @@ useRegisterPageRefresh(async () => {
 })
 
 function goFnOsAuthorize() {
-  // 与「稍后提醒」一样记一次关闭，避免 Teleport 遮罩带到设置页
   dismissBanner()
   void navigateTo('/settings?fnosAuth=1')
 }
 
+function isMobileViewport() {
+  return import.meta.client && window.matchMedia('(max-width: 768px)').matches
+}
+
+function resetAlbumView() {
+  view.value = 'results'
+  albumDetail.value = null
+  selectedAlbum.value = null
+}
+
 async function doSearch() {
   if (!keyword.value.trim()) return
+  resetAlbumView()
+  loadingText.value = '搜索中…'
   loading.value = true
   try {
     const res = await $fetch<{
-      items: Track[]
-      platforms: Array<{ id: string; label: string; sourceCount: number }>
+      type: 'song' | 'album'
+      items: Track[] | SearchAlbumItem[]
+      platforms: PlatformTab[]
       sourceHint: string[]
     }>('/api/search', {
       method: 'POST',
-      body: { platform: platform.value, keyword: keyword.value, page: 1 },
+      body: {
+        platform: platform.value,
+        keyword: keyword.value,
+        page: 1,
+        type: searchType.value,
+      },
     })
-    items.value = res.items
     if (res.platforms?.length) platforms.value = res.platforms
-    selected.value = res.items[0] || null
-    if (!res.sourceHint?.length) {
-      toast.warning('当前平台没有可用音源，试听/下载前请先到「音源管理」导入')
-    } else if (!res.items.length) {
-      toast.info('未找到相关歌曲')
+    ensureAlbumPlatform()
+    if (searchType.value === 'album') {
+      albumItems.value = res.items as SearchAlbumItem[]
+      items.value = []
+      selected.value = null
+      selectedAlbum.value = albumItems.value[0] || null
+      if (!res.sourceHint?.length) {
+        toast.warning('当前平台没有可用音源，下载前请先到「音源管理」导入')
+      } else if (!albumItems.value.length) {
+        toast.info('未找到相关专辑')
+      }
+    } else {
+      items.value = res.items as Track[]
+      albumItems.value = []
+      selectedAlbum.value = null
+      selected.value = items.value[0] || null
+      if (!res.sourceHint?.length) {
+        toast.warning('当前平台没有可用音源，试听/下载前请先到「音源管理」导入')
+      } else if (!items.value.length) {
+        toast.info('未找到相关歌曲')
+      }
     }
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '搜索失败'))
     items.value = []
+    albumItems.value = []
     selected.value = null
+    selectedAlbum.value = null
   } finally {
     loading.value = false
   }
@@ -123,6 +197,65 @@ async function doSearch() {
 watch(platform, () => {
   if (keyword.value.trim()) void doSearch()
 })
+
+watch(searchType, () => {
+  ensureAlbumPlatform()
+  resetAlbumView()
+  items.value = []
+  albumItems.value = []
+  selected.value = null
+  selectedAlbum.value = null
+  if (keyword.value.trim()) void doSearch()
+})
+
+async function openAlbumDetail(album: SearchAlbumItem) {
+  selectedAlbum.value = album
+  if (
+    albumDetail.value?.album.externalId === album.externalId &&
+    albumDetail.value?.album.platform === album.platform
+  ) {
+    if (isMobileViewport()) view.value = 'albumDetail'
+    return
+  }
+  loadingText.value = '加载专辑曲目…'
+  loading.value = true
+  try {
+    const res = await $fetch<AlbumDetailData>('/api/album/detail', {
+      method: 'POST',
+      body: { platform: album.platform, albumId: album.externalId },
+    })
+    albumDetail.value = res
+    // H5：全屏详情；PC：留在分栏，右侧直接展示曲目
+    view.value = isMobileViewport() ? 'albumDetail' : 'results'
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '加载专辑失败'))
+    albumDetail.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function openAlbumFromTrack(t: Track) {
+  if (!t.albumId) {
+    toast.info('该曲目未携带专辑 ID，无法跳转整专')
+    return
+  }
+  const album: SearchAlbumItem = {
+    id: `${t.platform}:${t.albumId}`,
+    externalId: t.albumId,
+    title: t.album || '专辑',
+    artist: t.artist,
+    cover: t.cover,
+    platform: t.platform,
+  }
+  platform.value = t.platform
+  if (searchType.value !== 'album') {
+    // watch(searchType) 会清空状态；下一拍再开详情
+    searchType.value = 'album'
+    await nextTick()
+  }
+  await openAlbumDetail(album)
+}
 
 async function preview() {
   if (!selected.value) return
@@ -177,30 +310,119 @@ async function download() {
   }
 }
 
+async function enqueueAlbumTracks(indices: number[]) {
+  if (!albumDetail.value || !indices.length || downloading.value) return
+  const tracks = indices
+    .map((i) => albumDetail.value!.tracks[i])
+    .filter(Boolean)
+  if (!tracks.length) {
+    toast.warning('没有可入队的曲目')
+    return
+  }
+  downloading.value = true
+  loadingText.value = '入队中…'
+  loading.value = true
+  try {
+    const { album } = albumDetail.value
+    const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
+      method: 'POST',
+      body: {
+        title: album.title,
+        platform: album.platform,
+        url: `album://${album.platform}/${album.externalId}`,
+        tracks: tracks.map((t) => ({
+          externalId: t.externalId,
+          title: t.title,
+          artist: t.artist,
+          album: t.album || album.title,
+          duration: t.duration,
+          platform: t.platform,
+          musicInfo: t.musicInfo,
+          matchMethod: 'id',
+        })),
+        downloadLyric: withLyric.value,
+        lyricMode: lyricMode.value,
+        quality: quality.value,
+      },
+    })
+    enqueueResult.value = res
+    showEnqueueResult.value = true
+    useDownloadBadge().notifyChanged()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '入队失败'))
+  } finally {
+    downloading.value = false
+    loading.value = false
+  }
+}
+
 function fmtDur(sec: number) {
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return `${m}:${String(s).padStart(2, '0')}`
 }
+
+async function retryFailedEnqueue() {
+  if (!enqueueResult.value?.results?.length || !albumDetail.value) return
+  const failedTitles = new Set(
+    enqueueResult.value.results.filter((r) => !r.ok).map((r) => r.title),
+  )
+  const indices = albumDetail.value.tracks
+    .map((t, i) => (failedTitles.has(t.title) ? i : -1))
+    .filter((i) => i >= 0)
+  if (!indices.length) {
+    toast.info('没有可重试的失败项')
+    return
+  }
+  showEnqueueResult.value = false
+  await enqueueAlbumTracks(indices)
+}
 </script>
 
 <template>
   <div class="page page-home">
-    <PageLoading :show="loading" text="搜索中…" />
+    <PageLoading :show="loading" :text="loadingText" />
     <FnOsDirAuthDialog
       :open="showFnOsAuthDialog"
       @authorize="goFnOsAuthorize"
       @dismiss="dismissBanner()"
     />
+    <EnqueueResultDialog
+      v-model:open="showEnqueueResult"
+      :result="enqueueResult"
+      continue-label="继续搜索"
+      @close="showEnqueueResult = false"
+      @retry-failed="retryFailedEnqueue"
+    />
+
     <div class="search-bar">
       <input
         v-model="keyword"
         class="input"
-        placeholder="搜索歌曲 / 歌手"
+        :placeholder="searchPlaceholder"
         @keyup.enter="doSearch"
       />
       <button class="btn" type="button" :disabled="loading" @click="doSearch">
         {{ loading ? '搜索中…' : '搜索' }}
+      </button>
+    </div>
+
+    <div class="type-tabs">
+      <button
+        type="button"
+        class="type-tab"
+        :class="{ active: searchType === 'song' }"
+        @click="searchType = 'song'"
+      >
+        单曲
+      </button>
+      <button
+        type="button"
+        class="type-tab"
+        :class="{ active: searchType === 'album' }"
+        @click="searchType = 'album'"
+      >
+        专辑
       </button>
     </div>
 
@@ -210,7 +432,8 @@ function fmtDur(sec: number) {
         :key="p.id"
         type="button"
         class="tab"
-        :class="{ active: platform === p.id }"
+        :class="{ active: platform === p.id, disabled: searchType === 'album' && !p.albumCapable }"
+        :disabled="searchType === 'album' && !p.albumCapable"
         @click="platform = p.id"
       >
         {{ p.label }}
@@ -218,41 +441,77 @@ function fmtDur(sec: number) {
       </button>
     </div>
 
-    <div class="split">
+    <p v-if="searchType === 'album' && !currentPlatformAlbumCapable" class="muted tip">
+      当前平台暂不支持专辑搜索，已自动切换可用平台
+    </p>
+
+    <!-- H5：全屏专辑详情 -->
+    <div v-if="view === 'albumDetail' && albumDetail" class="card album-detail-wrap">
+      <AlbumDetailPanel
+        :detail="albumDetail"
+        :loading="downloading"
+        :quality="quality"
+        :with-lyric="withLyric"
+        :lyric-mode="lyricMode"
+        :show-back="true"
+        @back="resetAlbumView"
+        @enqueue="enqueueAlbumTracks"
+        @update:quality="quality = $event"
+        @update:with-lyric="withLyric = $event"
+        @update:lyric-mode="lyricMode = $event"
+      />
+    </div>
+
+    <!-- 单曲 / 专辑搜索结果（PC 专辑：左侧列表 + 右侧直接曲目） -->
+    <div v-else class="split">
       <div class="card list">
-        <div
-          v-for="t in items"
-          :key="t.id"
-          class="row"
-          :class="{ active: selected?.id === t.id }"
-          @click="selectTrack(t)"
-        >
-          <CoverImage :src="t.cover" class="cover" :alt="t.title" />
-          <div class="meta">
-            <div class="title">{{ t.title }}</div>
-            <div class="muted">{{ t.artist }} · {{ fmtDur(t.duration) }}</div>
+        <template v-if="searchType === 'song'">
+          <div
+            v-for="t in items"
+            :key="t.id"
+            class="row"
+            :class="{ active: selected?.id === t.id }"
+            @click="selectTrack(t)"
+          >
+            <CoverImage :src="t.cover" class="cover" :alt="t.title" />
+            <div class="meta">
+              <div class="title">{{ t.title }}</div>
+              <div class="muted">{{ t.artist }} · {{ fmtDur(t.duration) }}</div>
+            </div>
           </div>
-        </div>
-        <p v-if="!items.length" class="muted empty">暂无结果，输入关键词搜索</p>
+          <p v-if="!items.length" class="muted empty">暂无结果，输入关键词搜索</p>
+        </template>
+        <template v-else>
+          <AlbumResultList
+            :items="albumItems"
+            :selected-id="selectedAlbum?.id"
+            @select="openAlbumDetail"
+          />
+        </template>
       </div>
 
-      <!-- 桌面：侧栏详情（移动端用 CSS 隐藏，避免 SSR 闪烁） -->
-      <div class="card detail desktop-only">
-        <template v-if="selected">
+      <div class="card detail desktop-only" :class="{ 'detail-album': searchType === 'album' && albumDetail }">
+        <template v-if="searchType === 'song' && selected">
           <CoverImage :src="selected.cover" class="detail-cover" :alt="selected.title" :lazy="false" />
           <h2>{{ selected.title }}</h2>
           <p class="muted">{{ selected.artist }}</p>
           <p class="muted">专辑：{{ selected.album || '—' }}</p>
           <p class="muted">平台：{{ selected.platform }} · ID：{{ selected.externalId }}</p>
+          <button
+            v-if="selected.albumId"
+            class="btn btn-ghost album-link"
+            type="button"
+            @click="openAlbumFromTrack(selected)"
+          >
+            查看专辑
+          </button>
 
           <label class="field">
             <span>音质</span>
             <select v-model="quality" class="select">
-              <option value="highest">最高可用</option>
-              <option value="flac24bit">flac24bit</option>
-              <option value="flac">flac</option>
-              <option value="320k">320k</option>
-              <option value="128k">128k</option>
+              <option v-for="opt in DOWNLOAD_QUALITY_OPTIONS" :key="opt.id" :value="opt.id">
+                {{ opt.label }}
+              </option>
             </select>
           </label>
           <label class="check">
@@ -271,14 +530,29 @@ function fmtDur(sec: number) {
             <button class="btn" type="button" @click="download">下载</button>
           </div>
         </template>
-        <p v-else class="muted">选择左侧歌曲查看详情</p>
+        <template v-else-if="searchType === 'album' && albumDetail">
+          <AlbumDetailPanel
+            :detail="albumDetail"
+            :loading="downloading"
+            :quality="quality"
+            :with-lyric="withLyric"
+            :lyric-mode="lyricMode"
+            :show-back="false"
+            @enqueue="enqueueAlbumTracks"
+            @update:quality="quality = $event"
+            @update:with-lyric="withLyric = $event"
+            @update:lyric-mode="lyricMode = $event"
+          />
+        </template>
+        <p v-else class="muted">
+          {{ searchType === 'album' ? '选择左侧专辑查看曲目' : '选择左侧歌曲查看详情' }}
+        </p>
       </div>
     </div>
 
-    <!-- 移动端：底部抽屉详情 -->
     <Teleport to="body">
       <div
-        v-if="detailSheetOpen && selected"
+        v-if="detailSheetOpen && selected && searchType === 'song'"
         class="detail-sheet-overlay"
         @click.self="closeDetailSheet"
       >
@@ -293,15 +567,21 @@ function fmtDur(sec: number) {
             <p class="artist-line">{{ selected.artist }}</p>
             <p class="meta-line">专辑：{{ selected.album || '—' }}</p>
             <p class="meta-line">平台：{{ selected.platform }} · ID：{{ selected.externalId }}</p>
+            <button
+              v-if="selected.albumId"
+              class="btn btn-ghost album-link"
+              type="button"
+              @click="openAlbumFromTrack(selected); closeDetailSheet()"
+            >
+              查看专辑
+            </button>
 
             <label class="field">
               <span>音质</span>
               <select v-model="quality" class="select">
-                <option value="highest">最高可用</option>
-                <option value="flac24bit">flac24bit</option>
-                <option value="flac">flac</option>
-                <option value="320k">320k</option>
-                <option value="128k">128k</option>
+                <option v-for="opt in DOWNLOAD_QUALITY_OPTIONS" :key="opt.id" :value="opt.id">
+                  {{ opt.label }}
+                </option>
               </select>
             </label>
             <label class="check">
@@ -335,7 +615,6 @@ function fmtDur(sec: number) {
           :aria-label="playing ? '暂停' : '播放'"
           @click="toggle"
         >
-          <!-- 播放中显示暂停；已暂停显示播放 -->
           <svg v-if="playing" class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
             <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
             <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
@@ -371,7 +650,7 @@ function fmtDur(sec: number) {
 .search-bar {
   display: flex;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   flex-shrink: 0;
 }
 .search-bar .input {
@@ -379,6 +658,27 @@ function fmtDur(sec: number) {
 }
 .search-bar .btn {
   min-width: 100px;
+}
+.type-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.type-tab {
+  border: 1px solid var(--border);
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.type-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
 }
 .tabs {
   display: flex;
@@ -401,12 +701,33 @@ function fmtDur(sec: number) {
   border-bottom: 2px solid var(--accent);
   font-weight: 600;
 }
+.tab.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .split {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
   gap: 12px;
   flex: 1;
   min-height: 0;
+}
+.album-detail-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  -webkit-overflow-scrolling: touch;
+}
+.detail.detail-album {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.detail.detail-album :deep(.album-detail) {
+  height: 100%;
 }
 @media (max-width: 768px) {
   .desktop-only {
@@ -435,6 +756,10 @@ function fmtDur(sec: number) {
     grid-template-columns: 1fr;
     gap: 10px;
   }
+  .album-detail-wrap {
+    /* H5 全屏详情：允许整体滚动，曲目区至少 400px */
+    overflow: auto;
+  }
   .actions {
     flex-direction: column;
   }
@@ -457,7 +782,7 @@ function fmtDur(sec: number) {
 }
 
 .list {
-  padding: 8px;
+  padding: 0;
   min-height: 0;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
@@ -513,11 +838,14 @@ function fmtDur(sec: number) {
   display: flex;
   gap: 8px;
 }
-.err {
-  color: var(--danger);
+.album-link {
+  margin-bottom: 8px;
+  width: 100%;
 }
 .tip {
-  color: var(--accent);
+  font-size: 13px;
+  margin: 0 0 8px;
+  flex-shrink: 0;
 }
 .empty {
   padding: 24px;
@@ -663,13 +991,5 @@ function fmtDur(sec: number) {
   margin: 0 0 2px;
   color: var(--muted);
   font-size: 13px;
-}
-.sheet-feedback {
-  margin: 12px 0 0;
-  font-size: 13px;
-  color: var(--accent);
-}
-.sheet-feedback.err {
-  color: var(--danger);
 }
 </style>

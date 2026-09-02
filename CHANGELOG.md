@@ -14,6 +14,9 @@
 
 ### Added
 
+- 搜索页支持「单曲 / 专辑」切换：可按专辑名搜索（wy / tx / kw / kg），进入专辑详情后多选或一键整专入队下载
+- 单曲详情增加「查看专辑」跳转（携带 albumId 时直达整专曲目列表）
+- 专辑/歌单批量入队结果弹窗：失败项按原因分组汇总，支持重试失败项；查看队列时可按 batchId 筛选同批任务
 - CHANGELOG 与 Release 分工：`[Unreleased]` 仅用户可感知摘要；发版 Release Notes 自动附 git tag 区间 commit 溯源；新增 `pnpm changelog:add` 辅助写入
 - CI：PR 策略检查（禁止二进制/超大文件、业务变更须更新 CHANGELOG）；PR 模板与按路径自动打 label
 - 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
@@ -34,6 +37,10 @@
 - 跨平台搜索适配器：修复 `server/services/platformSearch.ts` 中 `kw` (id)、`kg` (hash)、`tx` (mid) 的局部变量声明，防止由于变量未定义导致运行时抛出 `ReferenceError`
 - 音源沙箱异常治理：重构 `sourceRuntime.ts` 中的异步拒绝守卫（`rejectionGuard`），使用引用计数与局部桶（Bucket）监听器及时解绑与清理引用，消除未捕获 Promise 拒绝导致的 V8 GC Root 内存泄漏
 - 仓库治理：彻底移除仓库内提交的平台可执行二进制文件 `packaging/fnos/bin/fnpack.exe`
+
+### Changed
+
+- 全局 viewport 禁止双指缩放（`user-scalable=no`）
 
 ## [0.4.3] - 2026-08-28
 
