@@ -10,6 +10,7 @@ import {
   createBatchDeadline,
   reportProgress,
   withTimeout,
+  assertBatchNotAborted,
 } from '../utils/sourceBatchTimeout'
 
 export type SourceRow = {
@@ -218,10 +219,22 @@ export async function importSourcesText(
   let renamed = 0
   let failed = 0
   let timedOut = false
+  let cancelled = false
 
   for (let i = 0; i < parsed.length; i++) {
     const index = i + 1
     const item = parsed[i]!
+
+    if (opts?.signal?.aborted) {
+      cancelled = true
+      break
+    }
+    try {
+      assertBatchNotAborted(opts?.signal)
+    } catch {
+      cancelled = true
+      break
+    }
 
     if (deadline.isExpired()) {
       timedOut = true
@@ -302,8 +315,13 @@ export async function importSourcesText(
         })(),
         SOURCE_ITEM_TIMEOUT_MS,
         `音源「${finalName}」`,
+        opts?.signal,
       )
     } catch (err: any) {
+      if (err?.name === 'AbortError' || opts?.signal?.aborted) {
+        cancelled = true
+        break
+      }
       failed += 1
       const message = err?.message || String(err)
       await reportProgress(opts?.onProgress, {
@@ -324,6 +342,7 @@ export async function importSourcesText(
     renamed,
     failed,
     timedOut,
+    cancelled,
     results,
   }
 }
@@ -642,7 +661,7 @@ export async function applySourcesFromFiles(
   overwritten: number
   skipped: number
   failed: number
-  timedOut: boolean
+  cancelled?: boolean
   results: Array<Record<string, any>>
 }> {
   const items = buildFileUploadItems(files)
@@ -654,10 +673,22 @@ export async function applySourcesFromFiles(
   let skipped = 0
   let failed = 0
   let timedOut = false
+  let cancelled = false
 
   for (let i = 0; i < items.length; i++) {
     const index = i + 1
     const item = items[i]!
+
+    if (opts?.signal?.aborted) {
+      cancelled = true
+      break
+    }
+    try {
+      assertBatchNotAborted(opts?.signal)
+    } catch {
+      cancelled = true
+      break
+    }
 
     if (deadline.isExpired()) {
       timedOut = true
@@ -750,6 +781,7 @@ export async function applySourcesFromFiles(
           })(),
           SOURCE_ITEM_TIMEOUT_MS,
           `音源「${item.name}」`,
+          opts?.signal,
         )
         continue
       }
@@ -781,8 +813,13 @@ export async function applySourcesFromFiles(
         })(),
         SOURCE_ITEM_TIMEOUT_MS,
         `音源「${item.name}」`,
+        opts?.signal,
       )
     } catch (err: any) {
+      if (err?.name === 'AbortError' || opts?.signal?.aborted) {
+        cancelled = true
+        break
+      }
       failed += 1
       const message = err?.message || String(err)
       await reportProgress(opts?.onProgress, {
@@ -796,7 +833,7 @@ export async function applySourcesFromFiles(
     }
   }
 
-  return { total, imported, overwritten, skipped, failed, timedOut, results }
+  return { total, imported, overwritten, skipped, failed, timedOut, cancelled, results }
 }
 
 export function deleteSource(id: string) {
@@ -824,10 +861,22 @@ export async function checkSources(
   const deadline = createBatchDeadline(total)
   const out = []
   let timedOut = false
+  let cancelled = false
 
   for (let i = 0; i < rows.length; i++) {
     const index = i + 1
     const row = rows[i]!
+
+    if (opts?.signal?.aborted) {
+      cancelled = true
+      break
+    }
+    try {
+      assertBatchNotAborted(opts?.signal)
+    } catch {
+      cancelled = true
+      break
+    }
 
     if (deadline.isExpired()) {
       timedOut = true
@@ -908,8 +957,13 @@ export async function checkSources(
         })(),
         SOURCE_ITEM_TIMEOUT_MS,
         `音源「${row.name}」`,
+        opts?.signal,
       )
     } catch (err: any) {
+      if (err?.name === 'AbortError' || opts?.signal?.aborted) {
+        cancelled = true
+        break
+      }
       const ts = nowIso()
       const message = err?.message || String(err)
       getDb()
@@ -926,7 +980,7 @@ export async function checkSources(
     }
   }
 
-  return { items: out, timedOut, total }
+  return { items: out, timedOut, total, cancelled }
 }
 
 export async function cleanupDeadSources(

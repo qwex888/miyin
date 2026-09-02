@@ -22,6 +22,8 @@
 - 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
 - 单元测试：新增 `tests/platformSearchVar.test.ts`，覆盖 `wy`、`kw`、`kg`、`tx` 全部 4 个音乐平台的搜索适配器变量声明与返回结构完备性测试
 - 队列与健康检查：暴露 `/api/health` 实时内存指标（`rssMb`、`heapUsedMb`、`heapTotalMb`）与 `/api/downloads/stats` 队列聚合统计接口
+- 队列失败 Tab：选中任务后可「批量换音质」「批量换源」（全选也可用）；H5 工具栏双列自适应
+- 音源批量导入/检测/目录与完整包导入：进度弹窗支持「立即停止」；服务端按项边界中止，已完成项保留
 
 ### Changed
 
@@ -31,6 +33,8 @@
 
 ### Fixed
 
+- 队列页：下载进度 SSE 不再每次触发 `/api/downloads/stats`；仅在任务状态变化时防抖刷新，避免单任务下载时每秒请求数次
+- 单元测试：`playlistMatchStream` 入队相关用例改用临时 `DATA_DIR`，避免 `pnpm test` 向开发库 `./data` 写入 `Track N` 假任务污染下载队列
 - 服务启动自愈：服务启动时自愈扫描并将残留的孤儿 `status = 'running'` 任务重置为 `queued`，解决应用重启后残留假运行与并发显示不准
 - 取消竞态修复：修复下载任务取消与执行调度之间的竞态条件（P1-1），严密校验 DB 状态与 AbortController，防止已取消任务在 processTask 启动或执行中被错误复活为 `running`
 - 任务调度分发：优化 p-queue 任务分发机制，入队前保持 queued 状态并增加 tickWorker 互斥锁（P1-2），避免并发数设置较小时 UI 提前显示多条 running

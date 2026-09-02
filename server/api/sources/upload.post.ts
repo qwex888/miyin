@@ -3,7 +3,8 @@ import {
   applySourcesFromFiles,
   previewSourcesFromFiles,
 } from '~~/server/services/sourceRegistry'
-import { openNdjsonStream, wantsSourceBatchStream } from '~~/server/utils/ndjsonStream'
+import { wantsSourceBatchStream } from '~~/server/utils/ndjsonStream'
+import { runSourceBatchNdjsonRoute } from '~~/server/utils/sourceBatchStreamRoute'
 
 function formFlag(form: Awaited<ReturnType<typeof readMultipartFormData>>, name: string) {
   const part = form?.find((p) => p.name === name)
@@ -62,37 +63,9 @@ export default defineEventHandler(async (event) => {
       return await applySourcesFromFiles(files, onConflictRaw)
     }
 
-    const stream = openNdjsonStream(event)
-    void (async () => {
-      try {
-        const result = await applySourcesFromFiles(files, onConflictRaw, {
-          onProgress: async (p) => {
-            await stream.send({ type: 'progress', ...p })
-          },
-          onLog: async (l) => {
-            await stream.send({ type: 'log', ...l })
-          },
-        })
-        await stream.send({
-          type: 'done',
-          total: result.total,
-          imported: result.imported,
-          overwritten: result.overwritten,
-          skipped: result.skipped,
-          failed: result.failed,
-          timedOut: result.timedOut,
-          results: result.results,
-        })
-      } catch (err: any) {
-        await stream.send({
-          type: 'error',
-          message: err?.statusMessage || err?.message || String(err),
-        })
-      } finally {
-        await stream.close()
-      }
-    })()
-    return stream.response
+    return runSourceBatchNdjsonRoute(event, (handlers) =>
+      applySourcesFromFiles(files, onConflictRaw as 'overwrite' | 'skip', handlers),
+    )
   }
 
   const body = await readBody<{ name?: string; script?: string; url?: string }>(event)

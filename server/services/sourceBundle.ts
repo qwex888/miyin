@@ -17,6 +17,7 @@ import {
   createBatchDeadline,
   reportProgress,
   withTimeout,
+  assertBatchNotAborted,
 } from '../utils/sourceBatchTimeout'
 
 export const BUNDLE_VERSION = 1
@@ -247,10 +248,22 @@ export async function applySourcesBundle(
   let skipped = 0
   let failed = 0
   let timedOut = false
+  let cancelled = false
 
   for (let i = 0; i < items.length; i++) {
     const index = i + 1
     const item = items[i]!
+
+    if (opts?.signal?.aborted) {
+      cancelled = true
+      break
+    }
+    try {
+      assertBatchNotAborted(opts?.signal)
+    } catch {
+      cancelled = true
+      break
+    }
 
     if (deadline.isExpired()) {
       timedOut = true
@@ -332,6 +345,7 @@ export async function applySourcesBundle(
           })(),
           SOURCE_ITEM_TIMEOUT_MS,
           `音源「${item.name}」`,
+          opts?.signal,
         )
         continue
       }
@@ -366,8 +380,13 @@ export async function applySourcesBundle(
         })(),
         SOURCE_ITEM_TIMEOUT_MS,
         `音源「${item.name}」`,
+        opts?.signal,
       )
     } catch (err: any) {
+      if (err?.name === 'AbortError' || opts?.signal?.aborted) {
+        cancelled = true
+        break
+      }
       failed += 1
       const message = err?.message || String(err)
       await reportProgress(opts?.onProgress, {
@@ -393,6 +412,7 @@ export async function applySourcesBundle(
     skipped,
     failed,
     timedOut,
+    cancelled,
     results,
   }
 }

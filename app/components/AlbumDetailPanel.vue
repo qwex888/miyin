@@ -242,7 +242,6 @@ function enqueueAll() {
 }
 .track-list {
   flex: 1 1 auto;
-  min-height: 400px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -29,20 +29,28 @@ export type SourceBatchNdjsonHandlers = {
   onLog?: (event: SourceLogEvent) => void
 }
 
+export type SourceBatchNdjsonOptions = {
+  handlers?: SourceBatchNdjsonHandlers
+  signal?: AbortSignal
+}
+
 export async function fetchSourceBatchNdjson(
   path: string,
   init: RequestInit,
   onProgressOrHandlers:
     | ((text: string, event: Extract<SourceBatchStreamEvent, { type: 'progress' }>) => void)
     | SourceBatchNdjsonHandlers,
+  options?: SourceBatchNdjsonOptions,
 ): Promise<SourceBatchDoneEvent> {
   const handlers: SourceBatchNdjsonHandlers =
     typeof onProgressOrHandlers === 'function'
       ? { onProgress: onProgressOrHandlers }
       : onProgressOrHandlers
+  const signal = options?.signal ?? init.signal ?? undefined
 
   const res = await fetch(apiUrl(path), {
     ...init,
+    signal,
     credentials: 'same-origin',
     headers: {
       Accept: 'application/x-ndjson',
@@ -95,28 +103,54 @@ export async function fetchSourceBatchNdjson(
       doneEvent = event
       return
     }
+    if (event.type === 'cancelled') {
+      const err = new Error(event.message || '用户已停止')
+      err.name = 'AbortError'
+      throw err
+    }
     if (event.type === 'error') {
       throw new Error(event.message || '批处理失败')
     }
   }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      const event = parseNdjsonLine(line)
-      if (event) handleEvent(event)
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {})
+        const err = new Error('用户已停止')
+        err.name = 'AbortError'
+        throw err
+      }
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const event = parseNdjsonLine(line)
+        if (event) handleEvent(event)
+      }
     }
+
+    const tail = parseNdjsonLine(buffer)
+    if (tail) handleEvent(tail)
+  } catch (err: unknown) {
+    await reader.cancel().catch(() => {})
+    throw err
   }
 
-  const tail = parseNdjsonLine(buffer)
-  if (tail) handleEvent(tail)
-
   if (!doneEvent) {
+    if (signal?.aborted) {
+      const err = new Error('用户已停止')
+      err.name = 'AbortError'
+      throw err
+    }
     throw new Error('批处理未返回完成结果')
   }
   return doneEvent
+}
+
+export function isAbortError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string }
+  return e?.name === 'AbortError' || /用户已停止|aborted/i.test(String(e?.message || ''))
 }

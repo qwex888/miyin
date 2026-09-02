@@ -22,23 +22,41 @@ export function createBatchDeadline(total: number, itemMs = SOURCE_ITEM_TIMEOUT_
   }
 }
 
+export function batchAbortError(message = '用户已停止') {
+  const err = new Error(message)
+  err.name = 'AbortError'
+  return err
+}
+
+export function assertBatchNotAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw batchAbortError()
+}
+
 export async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
   try {
+    assertBatchNotAborted(signal)
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           reject(new SourceBatchTimeoutError(`${label}超时（${Math.round(ms / 1000)}s）`))
         }, ms)
+        if (signal) {
+          onAbort = () => reject(batchAbortError())
+          signal.addEventListener('abort', onAbort, { once: true })
+        }
       }),
     ])
   } finally {
     if (timer) clearTimeout(timer)
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort)
   }
 }
 

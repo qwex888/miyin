@@ -64,7 +64,7 @@ const qualityDialogOpen = ref(false)
 const qualityDialogTitle = ref('更换音质')
 const qualityDialogDesc = ref('仅对本任务生效，不会改全局默认音质，也不会影响其他下载任务。')
 const qualityCurrent = ref<string | null>(null)
-let qualityPending: Task | null = null
+let qualityPending: null | { mode: 'one'; task: Task } | { mode: 'batch'; tasks: Task[] } = null
 
 const {
   rememberSwitchSource,
@@ -135,12 +135,25 @@ async function openSwitchForTask(t: Task) {
 
 async function openSwitchForBatch() {
   if (!selectedCount.value) return
-  const tasks = items.value.filter((t) => selected.value.has(t.id))
-  if (!tasks.length) return
+  const tasks = selectAllState.value
+    ? items.value
+    : items.value.filter((t) => selected.value.has(t.id))
+  if (!tasks.length && !selectAllState.value) return
   try {
     const rows = await loadOkSources()
-    const platforms = [...new Set(tasks.map((t) => t.platform))]
-    const opts = toSwitchOptions(rows, platforms)
+    // 全选时展示全部可用音源；否则按当前选中任务的平台过滤
+    const platforms = selectAllState.value
+      ? [...new Set(rows.flatMap((r) => parsePlatforms(r.platforms)))]
+      : [...new Set(tasks.map((t) => t.platform))]
+    const opts = selectAllState.value
+      ? rows
+          .filter((r) => r.enabled === 1 && r.status === 'ok')
+          .map((r) => ({
+            id: r.id,
+            name: r.name,
+            platforms: parsePlatforms(r.platforms),
+          }))
+      : toSwitchOptions(rows, platforms)
     if (!opts.length) {
       toast.warning('选中任务没有可用音源')
       return
@@ -148,8 +161,9 @@ async function openSwitchForBatch() {
     switchPending = { mode: 'batch', tasks }
     switchOptions.value = opts
     switchDialogTitle.value = '批量换源'
-    switchDialogDesc.value =
-      platforms.length > 1
+    switchDialogDesc.value = selectAllState.value
+      ? `为当前失败 Tab 下全部 ${selectedCount.value} 个任务选择音源后重新下载。不支持该源的平台任务将失败并保留在失败列表。`
+      : platforms.length > 1
         ? `已选 ${tasks.length} 个任务（含 ${platforms.length} 个平台）。优先使用所选音源；不支持的平台将使用该平台已记住的音源。`
         : `为选中的 ${tasks.length} 个任务选择音源后重新下载，并记住为默认选项。`
     switchDialogOpen.value = true
@@ -174,6 +188,20 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
         { method: 'POST', body: { sourceId: payload.sourceId } },
       )
       toast.success(`已切换至音源「${res.sourceName}」并重试`)
+    } else if (selectAllState.value) {
+      const res = await $fetch<{ items: Array<{ sourceName?: string; error?: string }> }>(
+        '/api/downloads/batch-switch-source',
+        {
+          method: 'POST',
+          body: { allWithTab: 'failed', sourceId: payload.sourceId },
+        },
+      )
+      const ok = res.items.filter((i) => !i.error).length
+      const fail = res.items.length - ok
+      clearSelection()
+      const text = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
+      if (fail) toast.warning(text)
+      else toast.success(text)
     } else {
       const rows = await loadOkSources()
       const sourceById: Record<string, string> = {}
@@ -188,14 +216,14 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
       )
       const ok = res.items.filter((i) => !i.error).length
       const fail = res.items.length - ok
-      selected.value = new Set()
+      clearSelection()
       const text = `换源重试：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
       if (fail) toast.warning(text)
       else toast.success(text)
     }
     switchDialogOpen.value = false
     switchPending = null
-    await loadTabItems({ silent: true })
+    await loadTabItems({ silent: true, reset: true })
     notifyChanged()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '换源失败'))
@@ -323,6 +351,24 @@ async function fetchStats() {
   }
 }
 
+/** 进度 SSE 很密，统计只在可能影响 Tab 计数时刷新，并防抖合并 */
+let statsTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleFetchStats(immediate = false) {
+  if (immediate) {
+    if (statsTimer) {
+      clearTimeout(statsTimer)
+      statsTimer = null
+    }
+    void fetchStats()
+    return
+  }
+  if (statsTimer) return
+  statsTimer = setTimeout(() => {
+    statsTimer = null
+    void fetchStats()
+  }, 800)
+}
+
 async function loadTabItems(opts?: { silent?: boolean; reset?: boolean }) {
   if (opts?.reset) {
     currentPage.value = 1
@@ -381,8 +427,12 @@ async function loadMore() {
 }
 
 function upsert(task: Task) {
-  void fetchStats()
-  const isDeleted = (task as any).status === 'deleted'
+  const isDeleted = (task as { status?: string }).status === 'deleted'
+  const prev = items.value.find((t) => t.id === task.id)
+  // 仅状态变化会影响 Tab 角标计数；纯进度更新不要打 /stats
+  const statusChanged = isDeleted || !prev || prev.status !== task.status
+  if (statusChanged) scheduleFetchStats()
+
   const allowed = statusMap[tab.value]
   const belongsToBatch = !batchFilter.value || task.batch_id === batchFilter.value
   const belongsToTab = !isDeleted && belongsToBatch && allowed.includes(task.status)
@@ -419,7 +469,8 @@ function bindDownloadEvents() {
   offTask?.()
   offSnapshot = onSnapshot((list) => {
     latestSseSnapshot = list as Task[]
-    void fetchStats()
+    // 连接首帧 / 轮询快照：合并刷新，避免与 loadTabItems 叠打
+    scheduleFetchStats()
   })
   offTask = onTask((task) => {
     upsert(task as Task)
@@ -480,10 +531,25 @@ async function switchSource(t: Task) {
 }
 
 function openQualityForTask(t: Task) {
-  qualityPending = t
+  qualityPending = { mode: 'one', task: t }
   qualityCurrent.value = t.quality
   qualityDialogTitle.value = '更换音质'
   qualityDialogDesc.value = `为「${t.title}」选择音质后重新下载。仅本任务生效，不记忆默认选项。`
+  qualityDialogOpen.value = true
+}
+
+function openQualityForBatch() {
+  if (!selectedCount.value) return
+  const tasks = selectAllState.value
+    ? items.value
+    : items.value.filter((t) => selected.value.has(t.id))
+  if (!tasks.length && !selectAllState.value) return
+  qualityPending = { mode: 'batch', tasks }
+  qualityCurrent.value = tasks[0]?.quality ?? null
+  qualityDialogTitle.value = '批量换音质'
+  qualityDialogDesc.value = selectAllState.value
+    ? `为当前失败 Tab 下全部 ${selectedCount.value} 个任务选择音质后重新下载。仅影响选中范围，不改全局默认。`
+    : `为选中的 ${tasks.length} 个任务选择音质后重新下载。仅影响选中任务，不改全局默认。`
   qualityDialogOpen.value = true
 }
 
@@ -496,15 +562,35 @@ async function onQualityConfirm(payload: { quality: string }) {
   loadingText.value = '换音质重试中…'
   loading.value = true
   try {
-    const res = await $fetch<{ quality: string }>(`/api/downloads/${pending.id}/switch-quality`, {
-      method: 'POST',
-      body: { quality: payload.quality },
-    })
+    if (pending.mode === 'one') {
+      const res = await $fetch<{ quality: string }>(`/api/downloads/${pending.task.id}/switch-quality`, {
+        method: 'POST',
+        body: { quality: payload.quality },
+      })
+      toast.success(`已切换至音质「${qualityLabel(res.quality)}」并重试`)
+    } else {
+      const res = await $fetch<{ quality: string; items: Array<{ error?: string }> }>(
+        '/api/downloads/batch-switch-quality',
+        {
+          method: 'POST',
+          body: {
+            ids: selectAllState.value ? undefined : pending.tasks.map((t) => t.id),
+            allWithTab: selectAllState.value ? 'failed' : undefined,
+            quality: payload.quality,
+          },
+        },
+      )
+      const ok = res.items.filter((i) => !i.error).length
+      const fail = res.items.length - ok
+      clearSelection()
+      const text = `换音质「${qualityLabel(res.quality)}」：成功 ${ok}` + (fail ? `，失败 ${fail}` : '')
+      if (fail) toast.warning(text)
+      else toast.success(text)
+    }
     qualityDialogOpen.value = false
     qualityPending = null
     await loadTabItems({ silent: true })
     notifyChanged()
-    toast.success(`已切换至音质「${qualityLabel(res.quality)}」并重试`)
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '换音质失败'))
   } finally {
@@ -664,6 +750,10 @@ onBeforeUnmount(() => {
   offTask?.()
   offSnapshot = null
   offTask = null
+  if (statsTimer) {
+    clearTimeout(statsTimer)
+    statsTimer = null
+  }
 })
 onActivated(() => {
   bindDownloadEvents()
@@ -689,9 +779,9 @@ useRegisterPageRefresh(async () => {
         进行中
         <span class="tab-count">
           ({{ tabCounts.running }})
-          <small v-if="serverStats && serverStats.running > 0" class="tab-sub-count">
+          <!-- <small v-if="serverStats && serverStats.running > 0" class="tab-sub-count">
             [{{ serverStats.running }}下载/{{ serverStats.queued }}排队]
-          </small>
+          </small> -->
         </span>
       </button>
       <button
@@ -736,15 +826,30 @@ useRegisterPageRefresh(async () => {
           </button>
         </template>
         <template v-else>
-          <button class="btn btn-sm" type="button" :disabled="loading" @click="batchRetry">
-            批量重试（{{ selectedCount }}）
-          </button>
-          <button v-if="!selectAllState" class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="batchSwitchSource">
-            批量换源（{{ selectedCount }}）
-          </button>
-          <button class="btn btn-danger btn-sm" type="button" :disabled="loading" @click="batchDelete">
-            批量删除（{{ selectedCount }}）
-          </button>
+          <div class="toolbar-actions">
+            <button class="btn btn-sm" type="button" :disabled="loading" @click="batchRetry">
+              批量重试（{{ selectedCount }}）
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              :disabled="loading"
+              @click="openQualityForBatch"
+            >
+              批量换音质（{{ selectedCount }}）
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              :disabled="loading"
+              @click="batchSwitchSource"
+            >
+              批量换源（{{ selectedCount }}）
+            </button>
+            <button class="btn btn-danger btn-sm" type="button" :disabled="loading" @click="batchDelete">
+              批量删除（{{ selectedCount }}）
+            </button>
+          </div>
         </template>
       </template>
     </div>
@@ -967,6 +1072,14 @@ useRegisterPageRefresh(async () => {
   margin-bottom: 10px;
   flex-shrink: 0;
 }
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .list-pane {
   flex: 1;
   min-height: 0;
@@ -1165,8 +1278,12 @@ useRegisterPageRefresh(async () => {
   .toolbar {
     gap: 8px;
   }
-  .toolbar .btn {
-    flex: 1 1 calc(50% - 8px);
+  .toolbar-actions {
+    width: 100%;
+  }
+  .toolbar .btn,
+  .toolbar-actions .btn {
+    flex: 1 1 calc(50% - 4px);
     min-width: 0;
   }
   .task {

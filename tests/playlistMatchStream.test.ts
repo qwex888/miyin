@@ -1,11 +1,87 @@
-import { describe, it, expect } from 'vitest'
+declare global {
+  var createError: (input: { statusCode?: number; statusMessage?: string; message?: string; data?: unknown }) => Error
+}
+
+if (!globalThis.createError) {
+  globalThis.createError = (input: { statusCode?: number; statusMessage?: string; message?: string; data?: unknown }) => {
+    const err = new Error(input.message || input.statusMessage || 'Error') as Error & {
+      statusCode?: number
+      statusMessage?: string
+      data?: unknown
+    }
+    err.statusCode = input.statusCode
+    err.statusMessage = input.statusMessage
+    err.data = input.data
+    return err
+  }
+}
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { existsSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import Database from 'better-sqlite3'
 import {
   matchPlaylistTracks,
   matchAndEnqueuePlaylist,
   type PlaylistTrackDraft,
 } from '../server/services/playlistService'
+import { closeDb, getDb } from '../server/utils/db'
+import { getDbPath } from '../server/utils/paths'
+
+const defaultDataDir = resolve(process.cwd(), 'data')
+const defaultDbPath = join(defaultDataDir, 'miyin.sqlite')
+
+function countTrackPollutionInDefaultDb(): number {
+  if (!existsSync(defaultDbPath)) return 0
+  const db = new Database(defaultDbPath, { readonly: true, fileMustExist: true })
+  try {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS c FROM download_tasks WHERE title LIKE 'Track %'`)
+      .get() as { c: number }
+    return row.c
+  } finally {
+    db.close()
+  }
+}
 
 describe('matchPlaylistTracks concurrent and abort features', () => {
+  let tmpDir: string
+  let prevDataDir: string | undefined
+  let prevDownloadDir: string | undefined
+
+  beforeEach(() => {
+    closeDb()
+    prevDataDir = process.env.DATA_DIR
+    prevDownloadDir = process.env.DOWNLOAD_DIR
+    tmpDir = mkdtempSync(join(tmpdir(), 'miyin-playlist-match-test-'))
+    process.env.DATA_DIR = tmpDir
+    process.env.DOWNLOAD_DIR = tmpDir
+
+    expect(resolve(tmpDir)).not.toBe(defaultDataDir)
+    expect(getDbPath()).toBe(join(tmpDir, 'miyin.sqlite'))
+
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO sources (id, name, url, local_path, enabled, status, platforms, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, 'ok', ?, datetime('now'), datetime('now'))`,
+    ).run('test-source-1', '测试音源', 'http://example.com/source.js', '/tmp/fake.js', JSON.stringify(['wy']))
+  })
+
+  afterEach(() => {
+    closeDb()
+    if (prevDataDir === undefined) delete process.env.DATA_DIR
+    else process.env.DATA_DIR = prevDataDir
+    if (prevDownloadDir === undefined) delete process.env.DOWNLOAD_DIR
+    else process.env.DOWNLOAD_DIR = prevDownloadDir
+    try {
+      rmSync(tmpDir, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  })
+
   it('processes manual tracks immediately with allowManualBypass and supports onProgress callback', async () => {
     const tracks: PlaylistTrackDraft[] = [
       {
@@ -50,7 +126,6 @@ describe('matchPlaylistTracks concurrent and abort features', () => {
   it('supports abort signal to interrupt queue execution early in matchPlaylistTracks', async () => {
     const abortController = new AbortController()
 
-    // 构造大量需要处理的任务
     const tracks: PlaylistTrackDraft[] = Array.from({ length: 50 }, (_, i) => ({
       platform: 'wy',
       externalId: `ext-${i}`,
@@ -73,12 +148,12 @@ describe('matchPlaylistTracks concurrent and abort features', () => {
     })
 
     const rows = await matchPromise
-    // 应该在中途被中断，返回已完成的行，且不会执行完 50 个
     expect(rows.length).toBeLessThan(50)
     expect(rows.length).toBeGreaterThanOrEqual(5)
   })
 
   it('supports matchAndEnqueuePlaylist with concurrency, progress events and abort signal', async () => {
+    const pollutionBefore = countTrackPollutionInDefaultDb()
     const abortController = new AbortController()
     const tracks: PlaylistTrackDraft[] = Array.from({ length: 20 }, (_, i) => ({
       platform: 'wy',
@@ -109,7 +184,14 @@ describe('matchPlaylistTracks concurrent and abort features', () => {
     expect(res.results.length).toBe(5)
     expect(res.results.every((r) => r.ok)).toBe(true)
 
-    // 测试中断
+    const isolatedCount = (
+      getDb()
+        .prepare(`SELECT COUNT(*) AS c FROM download_tasks WHERE title LIKE 'Track %'`)
+        .get() as { c: number }
+    ).c
+    expect(isolatedCount).toBe(5)
+    expect(countTrackPollutionInDefaultDb()).toBe(pollutionBefore)
+
     let abortCount = 0
     await expect(
       matchAndEnqueuePlaylist(
@@ -131,5 +213,7 @@ describe('matchPlaylistTracks concurrent and abort features', () => {
         },
       ),
     ).rejects.toThrow()
+
+    expect(countTrackPollutionInDefaultDb()).toBe(pollutionBefore)
   })
 })

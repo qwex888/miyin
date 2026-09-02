@@ -610,6 +610,40 @@ export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean
   return { count: targetIds.length, items }
 }
 
+function resolveFailedTabTaskIds(ids?: string[], tab?: 'failed'): string[] {
+  if (ids?.length) return ids
+  if (tab === 'failed') {
+    const rows = getDb()
+      .prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`)
+      .all() as Array<{ id: string }>
+    return rows.map((r) => r.id)
+  }
+  return []
+}
+
+export function batchSwitchQualityAndRetry(
+  ids: string[],
+  quality: string,
+  opts?: { tab?: 'failed' },
+) {
+  const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
+  if (!allowed.has(quality)) {
+    throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
+  }
+  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab)
+  const items = []
+  for (const id of targetIds) {
+    try {
+      items.push(switchQualityAndRetry(id, quality))
+    } catch (e: unknown) {
+      const err = e as { statusMessage?: string; message?: string }
+      items.push({ id, error: err?.statusMessage || err?.message || String(e) })
+    }
+  }
+  kickWorker()
+  return { count: targetIds.length, quality, items }
+}
+
 /**
  * 失败任务换源重试：切换到指定音源（或同平台可用源中的下一个）并重新入队。
  */
@@ -682,13 +716,14 @@ export function switchSourceAndRetry(id: string, opts?: { sourceId?: string }) {
   }
 }
 
-/** 批量换源：可统一 sourceId，或按任务指定 sourceById */
+/** 批量换源：可统一 sourceId，或按任务指定 sourceById；支持 allWithTab=failed 全选 */
 export function batchSwitchSourceAndRetry(
   ids: string[],
-  opts?: { sourceId?: string; sourceById?: Record<string, string> },
+  opts?: { sourceId?: string; sourceById?: Record<string, string>; tab?: 'failed' },
 ) {
+  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab)
   const items = []
-  for (const id of ids) {
+  for (const id of targetIds) {
     try {
       const sourceId = opts?.sourceById?.[id] || opts?.sourceId
       items.push(switchSourceAndRetry(id, sourceId ? { sourceId } : undefined))
@@ -698,7 +733,7 @@ export function batchSwitchSourceAndRetry(
     }
   }
   kickWorker()
-  return { count: ids.length, items }
+  return { count: targetIds.length, items }
 }
 
 const lastEmitTimeByTaskId = new Map<string, number>()

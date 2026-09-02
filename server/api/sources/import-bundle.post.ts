@@ -1,5 +1,6 @@
 import { applySourcesBundle, previewSourcesBundle } from '~~/server/services/sourceBundle'
-import { openNdjsonStream, wantsSourceBatchStream } from '~~/server/utils/ndjsonStream'
+import { wantsSourceBatchStream } from '~~/server/utils/ndjsonStream'
+import { runSourceBatchNdjsonRoute } from '~~/server/utils/sourceBatchStreamRoute'
 
 export default defineEventHandler(async (event) => {
   const form = await readMultipartFormData(event)
@@ -59,35 +60,7 @@ export default defineEventHandler(async (event) => {
     return await applySourcesBundle(zipBuffer, conflict)
   }
 
-  const stream = openNdjsonStream(event)
-  void (async () => {
-    try {
-      const result = await applySourcesBundle(zipBuffer, conflict, {
-        onProgress: async (p) => {
-          await stream.send({ type: 'progress', ...p })
-        },
-        onLog: async (l) => {
-          await stream.send({ type: 'log', ...l })
-        },
-      })
-      await stream.send({
-        type: 'done',
-        total: result.total,
-        imported: result.imported,
-        overwritten: result.overwritten,
-        skipped: result.skipped,
-        failed: result.failed,
-        timedOut: result.timedOut,
-        results: result.results,
-      })
-    } catch (err: any) {
-      await stream.send({
-        type: 'error',
-        message: err?.statusMessage || err?.message || String(err),
-      })
-    } finally {
-      await stream.close()
-    }
-  })()
-  return stream.response
+  return runSourceBatchNdjsonRoute(event, (handlers) =>
+    applySourcesBundle(zipBuffer, conflict, handlers),
+  )
 })

@@ -25,6 +25,7 @@ const batchLogs = ref<Array<{ level?: string; message: string; name?: string }>>
 const batchCompleted = ref(false)
 const batchCompletedText = ref('处理完成')
 let batchConfirmResolve: (() => void) | null = null
+const batchAbortRef = ref<AbortController | null>(null)
 const selected = ref<Set<string>>(new Set())
 const moreOpen = ref(false)
 const rowOpsId = ref<string | null>(null)
@@ -65,6 +66,37 @@ function onBatchConfirm() {
   batchCompleted.value = false
   batchLogs.value = []
   loading.value = false
+}
+
+function cancelBatchOperation() {
+  batchAbortRef.value?.abort()
+}
+
+function isBatchRunning() {
+  return loading.value && !batchCompleted.value
+}
+
+async function runSourceBatchJob(
+  startText: string,
+  run: (signal: AbortSignal) => Promise<void>,
+) {
+  beginBatchWithLogs(startText)
+  const ac = new AbortController()
+  batchAbortRef.value = ac
+  try {
+    await run(ac.signal)
+  } catch (e: unknown) {
+    if (isAbortError(e)) {
+      toast.info('已停止；已完成项已保留')
+      resetBatchUi()
+      loading.value = false
+      return false
+    }
+    throw e
+  } finally {
+    if (batchAbortRef.value === ac) batchAbortRef.value = null
+  }
+  return true
 }
 
 const selectedCount = computed(() => selected.value.size)
@@ -140,38 +172,42 @@ function openEdit(s: Source) {
 }
 
 async function doImport() {
-  beginBatchWithLogs('当前进度：准备导入…')
   try {
-    const done = await fetchSourceBatchNdjson(
-      '/api/sources/import',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: importText.value, stream: true }),
-      },
-      {
-        onProgress: (text) => {
-          loadingText.value = text
+    const ok = await runSourceBatchJob('当前进度：准备导入…', async (signal) => {
+      const done = await fetchSourceBatchNdjson(
+        '/api/sources/import',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: importText.value, stream: true }),
+          signal,
         },
-        onLog: appendBatchLog,
-      },
-    )
-    const ok = done.imported ?? 0
-    const skipped = done.skipped ?? 0
-    const renamed = done.renamed ?? 0
-    const failed = done.failed ?? 0
-    const text =
-      `导入完成：成功 ${ok}/${done.total}` +
-      (skipped ? `，跳过 ${skipped}` : '') +
-      (renamed ? `，改名 ${renamed}` : '') +
-      (failed ? `，失败 ${failed}` : '') +
-      (done.timedOut ? '（整批超时）' : '')
-    if (ok > 0) toast.success(text)
-    else toast.warning(text)
-    showImport.value = false
-    importText.value = ''
-    await load({ silent: true })
-    await waitBatchConfirm(text)
+        {
+          onProgress: (text) => {
+            loadingText.value = text
+          },
+          onLog: appendBatchLog,
+        },
+      )
+      const imported = done.imported ?? 0
+      const skipped = done.skipped ?? 0
+      const renamed = done.renamed ?? 0
+      const failed = done.failed ?? 0
+      const text =
+        (done.cancelled ? '已停止：' : '导入完成：') +
+        `成功 ${imported}/${done.total}` +
+        (skipped ? `，跳过 ${skipped}` : '') +
+        (renamed ? `，改名 ${renamed}` : '') +
+        (failed ? `，失败 ${failed}` : '') +
+        (done.timedOut ? '（整批超时）' : '')
+      if (imported > 0) toast.success(text)
+      else toast.warning(text)
+      showImport.value = false
+      importText.value = ''
+      await load({ silent: true })
+      await waitBatchConfirm(text)
+    })
+    if (!ok) return
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入失败'))
     loading.value = false
@@ -181,29 +217,35 @@ async function doImport() {
 
 async function checkAll() {
   moreOpen.value = false
-  beginBatchWithLogs('当前进度：准备检测…')
   try {
-    const done = await fetchSourceBatchNdjson(
-      '/api/sources/check',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream: true }),
-      },
-      {
-        onProgress: (text) => {
-          loadingText.value = text
+    const ok = await runSourceBatchJob('当前进度：准备检测…', async (signal) => {
+      const done = await fetchSourceBatchNdjson(
+        '/api/sources/check',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream: true }),
+          signal,
         },
-        onLog: appendBatchLog,
-      },
-    )
-    await load({ silent: true })
-    const summary = summarizeSourceCheck(done.items || [])
-    const msg = done.timedOut ? `${summary.message}（整批超时）` : summary.message
-    if (summary.level === 'success') toast.success(msg)
-    else if (summary.level === 'warning') toast.warning(msg)
-    else toast.error(msg)
-    await waitBatchConfirm(msg)
+        {
+          onProgress: (text) => {
+            loadingText.value = text
+          },
+          onLog: appendBatchLog,
+        },
+      )
+      await load({ silent: true })
+      const summary = summarizeSourceCheck(done.items || [])
+      let msg = done.timedOut ? `${summary.message}（整批超时）` : summary.message
+      if (done.cancelled) msg = `已停止：${msg}`
+      if (summary.level === 'success') toast.success(msg)
+      else if (summary.level === 'warning') toast.warning(msg)
+      else toast.error(msg)
+      await waitBatchConfirm(msg)
+    })
+    if (!ok) {
+      await load({ silent: true })
+    }
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '检测失败'))
     loading.value = false
@@ -436,36 +478,42 @@ async function applyBundle(onConflict: 'overwrite' | 'skip') {
   const file = pendingBundleFile.value
   if (!file) return
   conflictLoading.value = true
-  beginBatchWithLogs('当前进度：准备导入完整包…')
   try {
-    const fd = new FormData()
-    fd.append('file', file, file.name)
-    fd.append('onConflict', onConflict)
-    fd.append('stream', 'true')
-    const done = await fetchSourceBatchNdjson(
-      '/api/sources/import-bundle',
-      { method: 'POST', body: fd },
-      {
-        onProgress: (text) => {
-          loadingText.value = text
+    const ok = await runSourceBatchJob('当前进度：准备导入完整包…', async (signal) => {
+      const fd = new FormData()
+      fd.append('file', file, file.name)
+      fd.append('onConflict', onConflict)
+      fd.append('stream', 'true')
+      const done = await fetchSourceBatchNdjson(
+        '/api/sources/import-bundle',
+        { method: 'POST', body: fd, signal },
+        {
+          onProgress: (text) => {
+            loadingText.value = text
+          },
+          onLog: appendBatchLog,
         },
-        onLog: appendBatchLog,
-      },
-    )
-    showConflict.value = false
-    pendingBundleFile.value = null
-    conflictPreview.value = null
-    const text =
-      `导入完成：新增 ${done.imported ?? 0}` +
-      (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
-      (done.skipped ? `，跳过 ${done.skipped}` : '') +
-      (done.failed ? `，失败 ${done.failed}` : '') +
-      (done.timedOut ? '（整批超时）' : '')
-    if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
-    else toast.warning(text)
-    await load({ silent: true })
-    conflictLoading.value = false
-    await waitBatchConfirm(text)
+      )
+      showConflict.value = false
+      pendingBundleFile.value = null
+      conflictPreview.value = null
+      const text =
+        (done.cancelled ? '已停止：' : '导入完成：') +
+        `新增 ${done.imported ?? 0}` +
+        (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
+        (done.skipped ? `，跳过 ${done.skipped}` : '') +
+        (done.failed ? `，失败 ${done.failed}` : '') +
+        (done.timedOut ? '（整批超时）' : '')
+      if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
+      else toast.warning(text)
+      await load({ silent: true })
+      conflictLoading.value = false
+      await waitBatchConfirm(text)
+    })
+    if (!ok) {
+      conflictLoading.value = false
+      await load({ silent: true })
+    }
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入完整包失败'))
     conflictLoading.value = false
@@ -478,36 +526,42 @@ async function applyDirFiles(onConflict: 'overwrite' | 'skip') {
   const files = pendingDirFiles.value
   if (!files.length) return
   conflictLoading.value = true
-  beginBatchWithLogs('当前进度：准备导入目录…')
   try {
-    const fd = new FormData()
-    for (const f of files) fd.append('files', f, f.name)
-    fd.append('onConflict', onConflict)
-    fd.append('stream', 'true')
-    const done = await fetchSourceBatchNdjson(
-      '/api/sources/upload',
-      { method: 'POST', body: fd },
-      {
-        onProgress: (text) => {
-          loadingText.value = text
+    const ok = await runSourceBatchJob('当前进度：准备导入目录…', async (signal) => {
+      const fd = new FormData()
+      for (const f of files) fd.append('files', f, f.name)
+      fd.append('onConflict', onConflict)
+      fd.append('stream', 'true')
+      const done = await fetchSourceBatchNdjson(
+        '/api/sources/upload',
+        { method: 'POST', body: fd, signal },
+        {
+          onProgress: (text) => {
+            loadingText.value = text
+          },
+          onLog: appendBatchLog,
         },
-        onLog: appendBatchLog,
-      },
-    )
-    showConflict.value = false
-    pendingDirFiles.value = []
-    conflictPreview.value = null
-    const text =
-      `导入完成：新增 ${done.imported ?? 0}` +
-      (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
-      (done.skipped ? `，跳过 ${done.skipped}` : '') +
-      (done.failed ? `，失败 ${done.failed}` : '') +
-      (done.timedOut ? '（整批超时）' : '')
-    if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
-    else toast.warning(text)
-    await load({ silent: true })
-    conflictLoading.value = false
-    await waitBatchConfirm(text)
+      )
+      showConflict.value = false
+      pendingDirFiles.value = []
+      conflictPreview.value = null
+      const text =
+        (done.cancelled ? '已停止：' : '导入完成：') +
+        `新增 ${done.imported ?? 0}` +
+        (done.overwritten ? `，覆盖 ${done.overwritten}` : '') +
+        (done.skipped ? `，跳过 ${done.skipped}` : '') +
+        (done.failed ? `，失败 ${done.failed}` : '') +
+        (done.timedOut ? '（整批超时）' : '')
+      if ((done.imported ?? 0) + (done.overwritten ?? 0) > 0) toast.success(text)
+      else toast.warning(text)
+      await load({ silent: true })
+      conflictLoading.value = false
+      await waitBatchConfirm(text)
+    })
+    if (!ok) {
+      conflictLoading.value = false
+      await load({ silent: true })
+    }
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '导入目录失败'))
     conflictLoading.value = false
@@ -582,7 +636,10 @@ function runRowOp(s: Source, action: 'toggle' | 'edit' | 'remove') {
       :logs="batchLogs"
       :completed="batchCompleted"
       :completed-text="batchCompletedText"
+      :cancelable="isBatchRunning()"
+      cancel-text="立即停止"
       @confirm="onBatchConfirm"
+      @cancel="cancelBatchOperation"
     />
     <div class="toolbar">
       <div class="title">

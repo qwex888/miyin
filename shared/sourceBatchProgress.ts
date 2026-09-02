@@ -49,6 +49,8 @@ export type SourceBatchDoneEvent = {
   failed?: number
   deleted?: number
   timedOut?: boolean
+  /** 用户主动停止；已完成项保留，未处理项不再继续 */
+  cancelled?: boolean
   items?: Array<{ id: string; status: string; error?: string }>
   results?: Array<Record<string, unknown>>
 }
@@ -58,11 +60,19 @@ export type SourceBatchErrorEvent = {
   message: string
 }
 
+export type SourceBatchCancelledEvent = {
+  type: 'cancelled'
+  message?: string
+  total?: number
+  processed?: number
+}
+
 export type SourceBatchStreamEvent =
   | SourceProgressEvent
   | SourceLogEvent
   | SourceBatchDoneEvent
   | SourceBatchErrorEvent
+  | SourceBatchCancelledEvent
   | { type: 'start'; total: number }
 
 export type SourceProgressReporter = (event: {
@@ -83,6 +93,7 @@ export type SourceLogReporter = (event: {
 export type SourceBatchHandlers = {
   onProgress?: SourceProgressReporter
   onLog?: SourceLogReporter
+  signal?: AbortSignal
 }
 
 export function sourceBatchTimeoutMs(total: number, itemMs = SOURCE_ITEM_TIMEOUT_MS): number {
