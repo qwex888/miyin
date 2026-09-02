@@ -22,7 +22,7 @@ export const PLATFORM_DISPLAY: Record<PlatformId, string> = {
 }
 
 export const SEARCH_PLATFORM_ORDER: PlatformId[] = ['wy', 'kw', 'kg', 'tx']
-export const PLAYLIST_PLATFORM_ORDER: PlatformId[] = ['wy', 'tx', 'kg']
+export const PLAYLIST_PLATFORM_ORDER: PlatformId[] = ['wy', 'tx', 'kg', 'kw']
 
 export function isPlatformId(v: string): v is PlatformId {
   return v in PLATFORM_DISPLAY

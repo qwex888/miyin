@@ -3,6 +3,9 @@ import {
   extractNeteasePlaylistId,
   extractQqPlaylistId,
   extractKugouPlaylistId,
+  extractKugouGcid,
+  extractKuwoPlaylistId,
+  signKugouAndroidParams,
 } from '../server/services/playlistService'
 
 describe('extractNeteasePlaylistId', () => {
@@ -56,5 +59,47 @@ describe('extractKugouPlaylistId', () => {
     )
     expect(extractKugouPlaylistId('https://m.kugou.com/plist/list/9746424')).toBe('9746424')
     expect(extractKugouPlaylistId('https://www.kugou.com/songlist/?specialid=9746424')).toBe('9746424')
+  })
+
+  it('does not treat gcid path as numeric specialid', () => {
+    expect(
+      extractKugouPlaylistId(
+        'https://m.kugou.com/songlist/gcid_3z9vj1svz2yz0c4/?src_cid=3z9vj1svz2yz0c4',
+      ),
+    ).toBeNull()
+  })
+})
+
+describe('extractKugouGcid', () => {
+  it('parses songlist gcid path and src_cid', () => {
+    expect(
+      extractKugouGcid(
+        'https://m.kugou.com/songlist/gcid_3z9vj1svz2yz0c4/?src_cid=3z9vj1svz2yz0c4&kgsscty1=wechat',
+      ),
+    ).toBe('gcid_3z9vj1svz2yz0c4')
+    expect(extractKugouGcid('https://www.kugou.com/songlist/foo?src_cid=3z9vj1svz2yz0c4')).toBe(
+      'gcid_3z9vj1svz2yz0c4',
+    )
+  })
+})
+
+describe('extractKuwoPlaylistId', () => {
+  it('parses newh5app and www playlist_detail', () => {
+    expect(
+      extractKuwoPlaylistId(
+        'https://m.kuwo.cn/newh5app/playlist_detail/3680085909?t=plantform&from=ar',
+      ),
+    ).toBe('3680085909')
+    expect(extractKuwoPlaylistId('https://www.kuwo.cn/playlist_detail/3680085909')).toBe('3680085909')
+    expect(extractKuwoPlaylistId('https://kuwo.cn/playlist_detail/1?pid=3680085909')).toBe('1')
+  })
+})
+
+describe('signKugouAndroidParams', () => {
+  it('is stable md5 over sorted params + salt', () => {
+    const a = signKugouAndroidParams({ b: '2', a: '1' })
+    const b = signKugouAndroidParams({ a: '1', b: '2' })
+    expect(a).toBe(b)
+    expect(a).toMatch(/^[a-f0-9]{32}$/)
   })
 })

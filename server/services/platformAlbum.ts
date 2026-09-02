@@ -33,8 +33,27 @@ const QQ_HEADERS = {
 export const ALBUM_CAPABLE_PLATFORMS = ['wy', 'tx', 'kw', 'kg'] as const
 export type AlbumCapablePlatform = (typeof ALBUM_CAPABLE_PLATFORMS)[number]
 
+/** 专辑曲目分页：单页条数（kg/kw）；与历史 kg pagesize 对齐 */
+export const ALBUM_SONG_PAGE_SIZE = 500
+/** 专辑曲目分页硬顶，防止上游 total 异常导致死循环 */
+export const ALBUM_SONG_MAX_PAGES = 50
+
 export function listAlbumCapablePlatforms(): AlbumCapablePlatform[] {
   return [...ALBUM_CAPABLE_PLATFORMS]
+}
+
+function dedupeAlbumSongs<T>(items: T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const item of items) {
+    const key = keyOf(item).trim()
+    if (key) {
+      if (seen.has(key)) continue
+      seen.add(key)
+    }
+    out.push(item)
+  }
+  return out
 }
 
 async function fetchText(url: string, init?: RequestInit) {
@@ -192,7 +211,8 @@ async function searchWyAlbums(keyword: string, page: number): Promise<SearchAlbu
 }
 
 async function getWyAlbumDetail(albumId: string): Promise<AlbumDetail> {
-  // /api/album/{id} 常返回 -462（需绑手机）；v1 可直接拿 songs
+  // /api/album/{id} 常返回 -462（需绑手机）；v1 可直接拿 songs。
+  // 网易专辑详情为单次全量接口，请求侧无 pagesize 截断；超大合集极少见。
   const url = `https://music.163.com/api/v1/album/${encodeURIComponent(albumId)}`
   const data = await fetchJson(url, { headers: { Referer: 'https://music.163.com/' } })
   if (data?.code && data.code !== 200) {
@@ -291,6 +311,7 @@ async function searchTxAlbums(keyword: string, page: number): Promise<SearchAlbu
 }
 
 async function getTxAlbumDetail(albumId: string): Promise<AlbumDetail> {
+  // QQ 专辑详情为单次全量 list，请求侧无 pagesize；total_song_num 与 list 对齐由上游保证。
   const url =
     `https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg?` +
     `albummid=${encodeURIComponent(albumId)}&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0`
@@ -369,9 +390,42 @@ async function searchKwAlbums(keyword: string, page: number): Promise<SearchAlbu
 }
 
 async function getKwAlbumDetail(albumId: string): Promise<AlbumDetail> {
-  const url = `https://search.kuwo.cn/r.s?stype=albuminfo&albumid=${encodeURIComponent(albumId)}&encoding=utf8&rformat=json`
-  const data = await fetchJson(url)
-  const detail = mapKwAlbumDetail(data, albumId)
+  // albuminfo 在部分合集上可能按 rn 截断；pn 从 0 起分页拉全，硬顶防死循环。
+  const allSongs: any[] = []
+  let albumRaw: Record<string, unknown> = {}
+  let firstData: any = null
+  let total = Number.POSITIVE_INFINITY
+
+  for (let page = 0; page < ALBUM_SONG_MAX_PAGES && allSongs.length < total; page++) {
+    const url =
+      `https://search.kuwo.cn/r.s?stype=albuminfo&albumid=${encodeURIComponent(albumId)}` +
+      `&pn=${page}&rn=${ALBUM_SONG_PAGE_SIZE}&encoding=utf8&rformat=json`
+    const data = await fetchJson(url)
+    if (page === 0) {
+      firstData = data
+      albumRaw = (data?.album || data?.data?.album || {}) as Record<string, unknown>
+      const songnum = Number(albumRaw.songnum)
+      if (Number.isFinite(songnum) && songnum > 0) total = songnum
+    }
+    const songList: any[] = data?.musiclist || data?.data?.musiclist || data?.abslist || []
+    if (!songList.length) break
+    const before = allSongs.length
+    allSongs.push(...songList)
+    const deduped = dedupeAlbumSongs(allSongs, (s) =>
+      String(s.MUSICRID || s.DC_TARGETID || s.id || ''),
+    )
+    allSongs.length = 0
+    allSongs.push(...deduped)
+    if (allSongs.length === before) break
+    if (songList.length < ALBUM_SONG_PAGE_SIZE) break
+  }
+
+  const merged = {
+    ...(firstData || {}),
+    album: { ...albumRaw, songnum: Number.isFinite(total) ? total : allSongs.length },
+    musiclist: allSongs,
+  }
+  const detail = mapKwAlbumDetail(merged, albumId)
   if (!detail.tracks.length) throw new Error('专辑曲目为空')
   return detail
 }
@@ -488,12 +542,52 @@ async function searchKgAlbums(keyword: string, page: number): Promise<SearchAlbu
   return mapKgSearchAlbums(data?.data?.info || data?.data?.lists || [])
 }
 
+function kgAlbumSongList(payload: any): any[] {
+  if (Array.isArray(payload?.info)) return payload.info
+  return payload?.lists || payload?.songs || []
+}
+
 async function getKgAlbumDetail(albumId: string): Promise<AlbumDetail> {
-  const url =
-    `http://mobilecdn.kugou.com/api/v3/album/song?albumid=${encodeURIComponent(albumId)}` +
-    `&page=1&pagesize=500&version=9108`
-  const data = await fetchJson(url, { headers: { Referer: 'https://www.kugou.com/' } })
-  const detail = mapKgAlbumDetail(data, albumId)
+  // mobilecdn album/song 单页最多 pagesize 条；>500 须翻页，硬顶防死循环。
+  const allSongs: any[] = []
+  let total = Number.POSITIVE_INFINITY
+  const headers = { Referer: 'https://www.kugou.com/' }
+
+  for (let page = 1; page <= ALBUM_SONG_MAX_PAGES && allSongs.length < total; page++) {
+    const url =
+      `http://mobilecdn.kugou.com/api/v3/album/song?albumid=${encodeURIComponent(albumId)}` +
+      `&page=${page}&pagesize=${ALBUM_SONG_PAGE_SIZE}&version=9108`
+    const data = await fetchJson(url, { headers })
+    const payload = data?.data || data
+    if (page === 1) {
+      const t = Number(payload?.total ?? payload?.info?.songcount)
+      if (Number.isFinite(t) && t > 0) total = t
+    }
+    const list = kgAlbumSongList(payload)
+    if (!list.length) break
+    const before = allSongs.length
+    allSongs.push(...list)
+    const deduped = dedupeAlbumSongs(allSongs, (s) =>
+      String(s.FileHash || s.HQFileHash || s.hash || ''),
+    )
+    allSongs.length = 0
+    allSongs.push(...deduped)
+    if (allSongs.length === before) break
+    if (list.length < ALBUM_SONG_PAGE_SIZE) break
+  }
+
+  const detail = mapKgAlbumDetail(
+    {
+      data: {
+        total:
+          Number.isFinite(total) && total !== Number.POSITIVE_INFINITY
+            ? total
+            : allSongs.length,
+        info: allSongs,
+      },
+    },
+    albumId,
+  )
   if (!detail.tracks.length) throw new Error('专辑曲目为空')
   return detail
 }

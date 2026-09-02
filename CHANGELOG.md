@@ -14,6 +14,8 @@
 
 ### Added
 
+- 歌单解析支持酷我（kw）链接（含 `m.kuwo.cn/newh5app/playlist_detail/{id}`），分页拉全曲目
+- 专辑搜索/详情：补充 mock fetch 的 service 与路由等价路径测试（含 kg/kw 分页与硬顶）
 - 设置页分为「基础设置 / 访问口令」两个 Tab；访问口令修改（须校验当前口令，可留空切回开放模式）立即生效，无需重启。优先级：应用内设置 > Docker `-e` / 飞牛安装向导；FPK 同步写入 `miyin.env`
 - 搜索页支持「单曲 / 专辑」切换：可按专辑名搜索（wy / tx / kw / kg），进入专辑详情后多选或一键整专入队下载
 - 单曲详情增加「查看专辑」跳转（携带 albumId 时直达整专曲目列表）
@@ -37,6 +39,9 @@
 
 ### Fixed
 
+- 酷狗超长歌单曲目偏少：改用 pubsongs `get_other_list_file`（安卓签名）拉全量，避免旧 `special/song` 将 total 截断（如 988→735）
+- 酷狗 gcid 分享歌单（如 `m.kugou.com/songlist/gcid_…`）识别失败：改为经 m 站解析 `specialid` 后再拉曲目，避免跟到 www 空壳页
+- 酷狗（kg）专辑详情超过单页 500 首时改为分页拉全曲目（硬顶 50 页），避免整专入队被截断；酷我（kw）专辑详情同步分页；网易/QQ 经核查为单次全量接口、请求侧无 pagesize 截断
 - 队列页：下载进度 SSE 不再每次触发 `/api/downloads/stats`；仅在任务状态变化时防抖刷新，避免单任务下载时每秒请求数次
 - 单元测试：`playlistMatchStream` 入队相关用例改用临时 `DATA_DIR`，避免 `pnpm test` 向开发库 `./data` 写入 `Track N` 假任务污染下载队列
 - 服务启动自愈：服务启动时自愈扫描并将残留的孤儿 `status = 'running'` 任务重置为 `queued`，解决应用重启后残留假运行与并发显示不准

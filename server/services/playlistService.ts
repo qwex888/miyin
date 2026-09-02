@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import PQueue from 'p-queue'
 import { PLAYLIST_PLATFORM_ORDER, platformLabel, platformListText } from '#shared/platforms'
 import { request as httpsRequest } from 'node:https'
@@ -35,6 +35,10 @@ const UA =
 /** 移动端 UA：wy PC 端 playlist/detail 常只返回少量 tracks，完整列表在 trackIds */
 const WY_MOBILE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 CloudMusic/8.9.10'
+
+/** 酷狗 m 站 gcid 页在桌面 UA 下常 302 到 www 空壳；移动 UA 可直接拿到内嵌 specialid */
+const KG_MOBILE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
 
 const QQ_HEADERS = {
   'User-Agent': UA,
@@ -95,8 +99,9 @@ export function extractQqPlaylistId(raw: string): string | null {
 }
 
 /**
- * 从 kg 歌单链接提取 specialid。
- * 支持：special/single/ID、m.kugou.com/plist/list/ID、specialid=、global_collection_id 中的数字段。
+ * 从 kg 歌单链接提取 specialid（数字）。
+ * 支持：special/single/ID、m.kugou.com/plist/list/ID、songlist/数字、specialid=。
+ * 注意：`/songlist/gcid_xxx` 不是 specialid，见 extractKugouGcid + resolveKugouSpecialId。
  */
 export function extractKugouPlaylistId(raw: string): string | null {
   const s = raw.trim()
@@ -105,16 +110,127 @@ export function extractKugouPlaylistId(raw: string): string | null {
   const path =
     s.match(/kugou\.com\/yy\/special\/single\/(\d+)/i) ||
     s.match(/m\.kugou\.com\/plist\/list\/(\d+)/i) ||
-    s.match(/kugou\.com\/songlist\/(\d+)/i) ||
+    s.match(/kugou\.com\/songlist\/(\d+)(?:\/|[?#]|$)/i) ||
     s.match(/\/special\/(\d+)\.html/i)
   if (path?.[1]) return path[1]
 
   const q = s.match(/[?&#](?:specialid|special_id|listid|id)=(\d{4,})/i)
   if (q?.[1] && /kugou\.com/i.test(s)) return q[1]
 
-  // global_collection_id=collection_3_520033053_218_0 → 仍优先 specialid；若仅有 collection 数字串则取末段不可靠，跳过
   if (/^\d{4,}$/.test(s)) return s
 
+  return null
+}
+
+/**
+ * 酷狗分享链常见 gcid / src_cid（非数字 specialid）。
+ * 例：m.kugou.com/songlist/gcid_3z9vj1svz2yz0c4/?src_cid=3z9vj1svz2yz0c4
+ */
+export function extractKugouGcid(raw: string): string | null {
+  const s = raw.trim()
+  if (!s || !/kugou\.com/i.test(s)) return null
+  const path = s.match(/\/songlist\/(gcid_[A-Za-z0-9]+)/i)
+  if (path?.[1]) return path[1]
+  const src = s.match(/[?&#]src_cid=([A-Za-z0-9_]+)/i)?.[1]
+  if (!src) return null
+  return src.startsWith('gcid_') ? src : `gcid_${src}`
+}
+
+/**
+ * 从 kw 歌单链接提取 pid。
+ * 支持：m.kuwo.cn/newh5app/playlist_detail/ID、kuwo.cn/playlist_detail/ID、?pid=
+ */
+export function extractKuwoPlaylistId(raw: string): string | null {
+  const s = raw.trim()
+  if (!s) return null
+  const path =
+    s.match(/kuwo\.cn\/(?:newh5app\/)?playlist_detail\/(\d+)/i) ||
+    s.match(/kuwo\.cn\/playlist\/(\d+)/i)
+  if (path?.[1]) return path[1]
+  const q = s.match(/[?&#]pid=(\d{4,})/i)
+  if (q?.[1] && /kuwo\.cn/i.test(s)) return q[1]
+  return null
+}
+
+function extractSpecialIdFromKugouHtml(html: string): string | null {
+  return (
+    html.match(/"specialid"\s*:\s*(\d{4,})/i)?.[1] ||
+    html.match(/specialid["'\s:=]+(\d{4,})/i)?.[1] ||
+    null
+  )
+}
+
+/**
+ * 将 gcid 分享页解析为可用的数字 specialid（优先拉 m 站，避免 www SPA 空壳）。
+ */
+export async function resolveKugouSpecialId(
+  raw: string,
+  opts?: { signal?: AbortSignal },
+): Promise<string | null> {
+  const numeric = extractKugouPlaylistId(raw)
+  if (numeric) return numeric
+  const gcid = extractKugouGcid(raw)
+  if (!gcid) return null
+
+  const candidates = [
+    `https://m.kugou.com/songlist/${gcid}/`,
+    `https://m.kugou.com/songlist/${gcid}`,
+  ]
+  for (const pageUrl of candidates) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+    try {
+      const res = await fetchWithTimeout(
+        pageUrl,
+        {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            'User-Agent': KG_MOBILE_UA,
+            Referer: 'https://m.kugou.com/',
+          },
+          signal: opts?.signal,
+        },
+        20000,
+      )
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location')
+        if (loc) {
+          const next = new URL(loc, pageUrl).href
+          // 跟到仍是 m 站的跳转；www 空壳无 specialid，跳过
+          if (/m\.kugou\.com/i.test(next)) {
+            const res2 = await fetchWithTimeout(
+              next,
+              {
+                method: 'GET',
+                redirect: 'follow',
+                headers: {
+                  'User-Agent': KG_MOBILE_UA,
+                  Referer: 'https://m.kugou.com/',
+                },
+                signal: opts?.signal,
+              },
+              20000,
+            )
+            if (res2.ok) {
+              const id = extractSpecialIdFromKugouHtml(await res2.text())
+              if (id) return id
+            }
+          }
+        }
+        continue
+      }
+      if (!res.ok) continue
+      const id = extractSpecialIdFromKugouHtml(await res.text())
+      if (id) return id
+    } catch (err: unknown) {
+      const e = err as { name?: string }
+      if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
+    }
+  }
   return null
 }
 
@@ -248,23 +364,50 @@ export async function resolvePlaylistUrl(input: string, opts?: { signal?: AbortS
       err.name = 'AbortError'
       throw err
     }
-    if (extractQqPlaylistId(current) || extractNeteasePlaylistId(current)) return current
+    if (
+      extractQqPlaylistId(current) ||
+      extractNeteasePlaylistId(current) ||
+      extractKugouPlaylistId(current) ||
+      extractKuwoPlaylistId(current)
+    ) {
+      return current
+    }
+
+    // 酷狗 gcid 分享链：用 m 站解析 specialid，避免跟到 www 空壳
+    if (/kugou\.com/i.test(current) && extractKugouGcid(current)) {
+      const specialId = await resolveKugouSpecialId(current, opts)
+      if (specialId) return `https://www.kugou.com/yy/special/single/${specialId}.html`
+    }
 
     const res = await fetchWithTimeout(current, {
       method: 'GET',
       redirect: 'manual',
-      headers: { 'User-Agent': UA, Referer: 'https://y.qq.com/' },
+      headers: {
+        'User-Agent': /kugou\.com/i.test(current) ? KG_MOBILE_UA : UA,
+        Referer: /kugou\.com/i.test(current)
+          ? 'https://m.kugou.com/'
+          : /kuwo\.cn/i.test(current)
+            ? 'https://m.kuwo.cn/'
+            : 'https://y.qq.com/',
+      },
       signal: opts?.signal,
     })
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location')
       if (!loc) break
-      current = new URL(loc, current).href
+      const next = new URL(loc, current).href
+      // 酷狗 gcid：m→www 空壳无 id，改为走 resolveKugouSpecialId
+      if (/\/songlist\/gcid_[A-Za-z0-9]+/i.test(current) && /www\.kugou\.com\/songlist/i.test(next)) {
+        const specialId = await resolveKugouSpecialId(current, opts)
+        if (specialId) return `https://www.kugou.com/yy/special/single/${specialId}.html`
+        break
+      }
+      current = next
       continue
     }
 
     const ct = res.headers.get('content-type') || ''
-    if (ct.includes('text/html') || ct.includes('text/plain')) {
+    if (ct.includes('text/html') || ct.includes('text/plain') || !ct) {
       const html = await res.text()
       const qqId =
         html.match(/y\.qq\.com\/[^"'\\\s]*playlist\/(\d+)/i)?.[1] ||
@@ -273,10 +416,15 @@ export async function resolvePlaylistUrl(input: string, opts?: { signal?: AbortS
       if (qqId) return `https://y.qq.com/n/ryqq/playlist/${qqId}`
 
       const kgId =
+        extractSpecialIdFromKugouHtml(html) ||
         html.match(/kugou\.com\/yy\/special\/single\/(\d+)/i)?.[1] ||
-        html.match(/m\.kugou\.com\/plist\/list\/(\d+)/i)?.[1] ||
-        html.match(/specialid["'\s:=]+(\d{4,})/i)?.[1]
+        html.match(/m\.kugou\.com\/plist\/list\/(\d+)/i)?.[1]
       if (kgId) return `https://www.kugou.com/yy/special/single/${kgId}.html`
+
+      const kwId =
+        html.match(/kuwo\.cn\/(?:newh5app\/)?playlist_detail\/(\d+)/i)?.[1] ||
+        html.match(/["']pid["']\s*:\s*["']?(\d{5,})/i)?.[1]
+      if (kwId) return `https://m.kuwo.cn/newh5app/playlist_detail/${kwId}`
 
       const wy =
         html.match(/https?:\/\/[^"'\\\s]*music\.163\.com[^"'\\\s]*playlist[^"'\\\s]*/i)?.[0] ||
@@ -287,8 +435,10 @@ export async function resolvePlaylistUrl(input: string, opts?: { signal?: AbortS
         if (id) return `https://music.163.com/playlist?id=${id}`
       }
     }
+
     break
   }
+
   return current
 }
 
@@ -465,6 +615,133 @@ function splitKgFilename(filename: string): { artist: string; title: string } {
   return { artist: '未知', title: raw || '未知' }
 }
 
+/** 酷狗安卓客户端常用签名盐（公开逆向约定） */
+const KG_ANDROID_SALT = 'OIlwieks28dk2k092lksi2UIkp'
+
+/** @internal 单测可见 */
+export function signKugouAndroidParams(params: Record<string, string>): string {
+  const body = Object.keys(params)
+    .sort()
+    .map((k) => `${k}=${params[k]}`)
+    .join('')
+  return createHash('md5').update(`${KG_ANDROID_SALT}${body}${KG_ANDROID_SALT}`).digest('hex')
+}
+
+function mapKugouPlaylistSongs(rows: unknown[]): PlaylistTrackDraft[] {
+  return rows
+    .map((s: unknown) => {
+      const song = (s || {}) as Record<string, unknown>
+      const hash = String(song.hash || song['320hash'] || '')
+      const split = splitKgFilename(
+        String(song.name || song.filename || song.songname || song.fileName || ''),
+      )
+      const albumInfo = song.albuminfo as Record<string, unknown> | undefined
+      return {
+        externalId: hash || undefined,
+        title: split.title,
+        artist: split.artist,
+        album: String(song.album_name || albumInfo?.name || ''),
+        duration: Number(song.duration || song.timelength || 0) || undefined,
+        platform: 'kg',
+      } satisfies PlaylistTrackDraft
+    })
+    .filter((t) => t.title && t.title !== '未知')
+}
+
+/**
+ * 优先走 pubsongs `get_other_list_file`（与 App 曲目量一致）；
+ * 旧版 mobilecdn `special/song` 对部分超长歌单会把 total 截断（如 988→735）。
+ */
+async function fetchKugouPlaylistSongsViaPubsongs(
+  specialId: string,
+  opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void },
+  progressTitle = '',
+): Promise<unknown[]> {
+  const pageSize = 100
+  const mid = 'miyin_kg_playlist_mid_0001'
+  const all: unknown[] = []
+  let total = Number.POSITIVE_INFINITY
+  let page = 1
+
+  while (all.length < total && page <= 50) {
+    if (opts?.signal?.aborted) {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+    const clienttime = String(Math.floor(Date.now() / 1000))
+    const params: Record<string, string> = {
+      specialid: specialId,
+      specalidpgc: specialId,
+      need_sort: '1',
+      module: 'CloudMusic',
+      clientver: '11239',
+      pagesize: String(pageSize),
+      userid: '0',
+      page: String(page),
+      type: '0',
+      area_code: '1',
+      appid: '1005',
+      clienttime,
+      mid,
+      dfid: '-',
+    }
+    params.signature = signKugouAndroidParams(params)
+    const qs = new URLSearchParams(params).toString()
+    const headers = {
+      'User-Agent': 'Android9-AndroidPhone-11239-18-0-playlist-wifi',
+      Referer: 'https://m.kugou.com/',
+      mid,
+      dfid: '-',
+      clienttime,
+      'x-router': 'pubsongscdn.kugou.com',
+    }
+    const hosts = [
+      'http://gatewayretry.kugou.com',
+      'https://gatewayretry.kugou.com',
+      'http://gateway.kugou.com',
+    ]
+    let data: Record<string, unknown> | null = null
+    const errors: string[] = []
+    for (const host of hosts) {
+      try {
+        data = (await fetchKugouJson(
+          `${host}/v2/get_other_list_file?${qs}`,
+          headers,
+          20000,
+          opts?.signal,
+        )) as Record<string, unknown>
+        break
+      } catch (err: unknown) {
+        const e = err as { name?: string; message?: string }
+        if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
+        errors.push(`${host}: ${e?.message || String(err)}`)
+      }
+    }
+    if (!data) throw new Error(errors.join('；') || 'pubsongs unavailable')
+    if (data.status !== 1 && data.error_code !== 0 && data.error_code !== '0') {
+      throw new Error(`kugou pubsongs ${data.error_code}/${data.status}: ${data.errmsg || data.error || ''}`)
+    }
+    const dataObj = (data.data || {}) as Record<string, unknown>
+    if (page === 1) {
+      const t = Number(dataObj.count ?? dataObj.total ?? 0)
+      if (Number.isFinite(t) && t > 0) total = t
+    }
+    const chunk = (dataObj.info as unknown[]) || []
+    all.push(...chunk)
+    if (opts?.onProgress) {
+      opts.onProgress({
+        index: all.length,
+        total: Number.isFinite(total) ? total : all.length,
+        title: progressTitle,
+      })
+    }
+    if (!chunk.length || chunk.length < pageSize) break
+    page += 1
+  }
+  return all
+}
+
 async function parseKugouPlaylist(id: string, url: string, opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void }): Promise<PlaylistDraft> {
   const headers = { 'User-Agent': UA, Referer: 'https://www.kugou.com/' }
   // CDN 证书常与域名不匹配，优先 http；多域名回退
@@ -502,25 +779,88 @@ async function parseKugouPlaylist(id: string, url: string, opts?: { signal?: Abo
     /* ignore title failure */
   }
 
-  const pageSize = 50
+  let all: unknown[] = []
+  try {
+    all = await fetchKugouPlaylistSongsViaPubsongs(id, opts, title)
+  } catch (err: unknown) {
+    const e = err as { name?: string }
+    if (e?.name === 'AbortError' || opts?.signal?.aborted) throw err
+    // 回退旧接口（可能截断超长歌单）
+    const pageSize = 50
+    let page = 1
+    let total = Infinity
+    all = []
+    while (all.length < total && page <= 40) {
+      if (opts?.signal?.aborted) {
+        const err2 = new Error('The operation was aborted')
+        err2.name = 'AbortError'
+        throw err2
+      }
+      const data = await getJson(
+        `/api/v3/special/song?specialid=${encodeURIComponent(id)}&page=${page}&pagesize=${pageSize}&area_code=1`,
+      )
+      if (data?.status !== 1 && data?.errcode !== 0) {
+        throw new Error(`kugou code ${data?.errcode}/${data?.status}`)
+      }
+      const dataObj = data?.data as Record<string, unknown> | undefined
+      const chunk = (dataObj?.info as unknown[]) || []
+      total = Number(dataObj?.total || 0) || total
+      all.push(...chunk)
+      if (opts?.onProgress) {
+        opts.onProgress({
+          index: all.length,
+          total: Number.isFinite(total) ? total : all.length,
+          title,
+        })
+      }
+      if (!chunk.length || chunk.length < pageSize) break
+      page += 1
+    }
+  }
+
+  const tracks = mapKugouPlaylistSongs(all)
+
+  if (!tracks.length) throw new Error(`${platformLabel('kg')} 歌单无曲目或接口失败`)
+  return { platform: 'kg', title, url, tracks }
+}
+
+async function parseKuwoPlaylist(
+  id: string,
+  url: string,
+  opts?: { signal?: AbortSignal; onProgress?: (p: { index: number; total: number; title: string }) => void },
+): Promise<PlaylistDraft> {
+  const pageSize = 100
   let page = 1
-  let total = Infinity
+  let total = Number.POSITIVE_INFINITY
   const all: unknown[] = []
-  while (all.length < total && page <= 40) {
+  let title = `歌单 ${id}`
+  const headers = {
+    'User-Agent': KG_MOBILE_UA,
+    Referer: 'https://m.kuwo.cn/',
+  }
+
+  while (all.length < total && page <= 50) {
     if (opts?.signal?.aborted) {
       const err = new Error('The operation was aborted')
       err.name = 'AbortError'
       throw err
     }
-    const data = await getJson(
-      `/api/v3/special/song?specialid=${encodeURIComponent(id)}&page=${page}&pagesize=${pageSize}&area_code=1`,
-    )
-    if (data?.status !== 1 && data?.errcode !== 0) {
-      throw new Error(`kugou code ${data?.errcode}/${data?.status}`)
+    const api =
+      `https://m.kuwo.cn/newh5app/wapi/api/www/playlist/playListInfo` +
+      `?pid=${encodeURIComponent(id)}&pn=${page}&rn=${pageSize}`
+    const res = await fetchWithTimeout(api, { headers, signal: opts?.signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as Record<string, unknown>
+    if (data?.code != null && Number(data.code) !== 200) {
+      throw new Error(`kuwo code ${data.code}`)
     }
-    const dataObj = data?.data as Record<string, unknown> | undefined
-    const chunk = (dataObj?.info as unknown[]) || []
-    total = Number(dataObj?.total || 0) || total
+    const payload = (data?.data || {}) as Record<string, unknown>
+    if (page === 1) {
+      title = String(payload.name || payload.title || title)
+      const t = Number(payload.total)
+      if (Number.isFinite(t) && t > 0) total = t
+    }
+    const chunk = (payload.musicList as unknown[]) || []
     all.push(...chunk)
     if (opts?.onProgress) {
       opts.onProgress({
@@ -536,26 +876,37 @@ async function parseKugouPlaylist(id: string, url: string, opts?: { signal?: Abo
   const tracks: PlaylistTrackDraft[] = all
     .map((s: unknown) => {
       const song = (s || {}) as Record<string, unknown>
-      const hash = String(song.hash || song['320hash'] || '')
-      const split = splitKgFilename(String(song.filename || song.songname || ''))
+      const rid = String(song.rid || String(song.musicrid || '').replace(/^MUSIC_/i, '') || '')
+      const name = String(song.name || song.SONGNAME || '未知')
       return {
-        externalId: hash || undefined,
-        title: split.title,
-        artist: split.artist,
-        album: (song.album_name as string) || '',
+        externalId: rid || undefined,
+        title: name,
+        artist: String(song.artist || song.ARTIST || '未知'),
+        album: String(song.album || song.ALBUM || ''),
         duration: Number(song.duration || 0) || undefined,
-        platform: 'kg',
+        platform: 'kw',
+        musicInfo: rid
+          ? {
+              name,
+              singer: String(song.artist || song.ARTIST || '未知'),
+              albumName: String(song.album || song.ALBUM || ''),
+              songmid: rid,
+              hash: rid,
+              source: 'kw',
+            }
+          : undefined,
+        matchMethod: rid ? 'id' : undefined,
       } satisfies PlaylistTrackDraft
     })
     .filter((t) => t.title && t.title !== '未知')
 
-  if (!tracks.length) throw new Error(`${platformLabel('kg')} 歌单无曲目或接口失败`)
-  return { platform: 'kg', title, url, tracks }
+  if (!tracks.length) throw new Error(`${platformLabel('kw')} 歌单无曲目或接口失败`)
+  return { platform: 'kw', title, url, tracks }
 }
 
 /**
  * 解析歌单链接：
- * - wy / tx / kg
+ * - wy / tx / kg / kw
  */
 export async function parsePlaylist(
   url: string,
@@ -578,8 +929,17 @@ export async function parsePlaylist(
   }
 
   if (/kugou\.com/i.test(haystack)) {
-    const kgId = extractKugouPlaylistId(resolved) || extractKugouPlaylistId(raw)
+    const kgId =
+      extractKugouPlaylistId(resolved) ||
+      extractKugouPlaylistId(raw) ||
+      (await resolveKugouSpecialId(raw, opts)) ||
+      (await resolveKugouSpecialId(resolved, opts))
     if (kgId) return await parseKugouPlaylist(kgId, raw, opts)
+  }
+
+  if (/kuwo\.cn/i.test(haystack)) {
+    const kwId = extractKuwoPlaylistId(resolved) || extractKuwoPlaylistId(raw)
+    if (kwId) return await parseKuwoPlaylist(kwId, raw, opts)
   }
 
   if (/music\.163\.com/i.test(haystack)) {
@@ -609,6 +969,9 @@ export async function parsePlaylist(
 
   const kgId = extractKugouPlaylistId(resolved) || extractKugouPlaylistId(raw)
   if (kgId && /kugou\.com/i.test(haystack)) return await parseKugouPlaylist(kgId, raw, opts)
+
+  const kwId = extractKuwoPlaylistId(resolved) || extractKuwoPlaylistId(raw)
+  if (kwId && /kuwo\.cn/i.test(haystack)) return await parseKuwoPlaylist(kwId, raw, opts)
 
   const wyId = extractNeteasePlaylistId(resolved) || extractNeteasePlaylistId(raw)
   if (wyId) return await parseNeteasePlaylist(wyId, raw, opts)
