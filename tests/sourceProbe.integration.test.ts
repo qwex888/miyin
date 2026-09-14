@@ -63,4 +63,35 @@ describe('sourceProbe integration', () => {
     expect(r.lastError).toContain('404')
     expect(r.lastError).toContain('版本过低')
   })
+
+  it('captures structured updateInfo from updateAlert payload', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'miyin-probe-'))
+    const file = join(dir, 'need-update.js')
+    writeFileSync(
+      file,
+      `
+      const { EVENT_NAMES, on, send } = globalThis.lx
+      send(EVENT_NAMES.updateAlert, {
+        version: '1.3.0',
+        updateUrl: 'https://www.yuque.com/demo/doc',
+        description: '请尽快更新！',
+        log: '发现新版本',
+      })
+      console.log('发现新版本,需要更新,脚本将不会初始化:', {
+        version: '1.3.0',
+        updateUrl: 'https://www.yuque.com/demo/doc',
+        description: '请尽快更新！',
+      })
+      on(EVENT_NAMES.request, async () => {
+        throw new Error('需要更新后才能使用')
+      })
+      send(EVENT_NAMES.inited, { status: true, sources: { wy: { qualitys: ['128k'] } } })
+    `,
+      'utf8',
+    )
+    const r = await probeLocalScript(file)
+    expect(r.status).toBe('dead')
+    expect(r.updateInfo?.version).toBe('1.3.0')
+    expect(r.updateInfo?.updateUrl).toContain('yuque.com')
+  })
 })

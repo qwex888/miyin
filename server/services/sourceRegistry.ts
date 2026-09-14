@@ -6,6 +6,10 @@ import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceIm
 import { probeLocalScript } from './sourceProbe'
 import type { SourceBatchHandlers, SourceProgressReporter } from '#shared/sourceBatchProgress'
 import {
+  isDirectSourceScriptUrl,
+  type SourceUpdateInfo,
+} from '#shared/sourceUpdate'
+import {
   SOURCE_ITEM_TIMEOUT_MS,
   createBatchDeadline,
   reportProgress,
@@ -24,12 +28,31 @@ export type SourceRow = {
   platforms: string
   last_checked_at: string | null
   last_error: string | null
+  update_info_json: string | null
   created_at: string
   updated_at: string
 }
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+function encodeUpdateInfo(info: SourceUpdateInfo | null | undefined): string | null {
+  if (!info) return null
+  if (!info.version && !info.updateUrl && !info.description && !info.message) return null
+  return JSON.stringify(info)
+}
+
+export function parseSourceUpdateInfoJson(raw: string | null | undefined): SourceUpdateInfo | null {
+  if (!raw) return null
+  try {
+    const obj = JSON.parse(raw) as SourceUpdateInfo
+    if (!obj || typeof obj !== 'object') return null
+    if (!obj.version && !obj.updateUrl && !obj.description && !obj.message) return null
+    return obj
+  } catch {
+    return null
+  }
 }
 
 function idFromUrl(url: string) {
@@ -112,12 +135,13 @@ async function persistSource(input: {
   const platforms = probed.platforms
   const status = probed.status
   const lastError = probed.lastError
+  const updateInfo = encodeUpdateInfo(probed.updateInfo)
 
   const ts = nowIso()
   if (existing) {
     getDb()
       .prepare(
-        `UPDATE sources SET name=?, url=?, mirror_url=?, local_path=?, status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+        `UPDATE sources SET name=?, url=?, mirror_url=?, local_path=?, status=?, platforms=?, last_checked_at=?, last_error=?, update_info_json=?, updated_at=? WHERE id=?`,
       )
       .run(
         input.name,
@@ -128,14 +152,15 @@ async function persistSource(input: {
         JSON.stringify(platforms),
         ts,
         lastError,
+        updateInfo,
         ts,
         id,
       )
   } else {
     getDb()
       .prepare(
-        `INSERT INTO sources (id, name, url, mirror_url, local_path, enabled, status, platforms, last_checked_at, last_error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sources (id, name, url, mirror_url, local_path, enabled, status, platforms, last_checked_at, last_error, update_info_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -147,6 +172,7 @@ async function persistSource(input: {
         JSON.stringify(platforms),
         ts,
         lastError,
+        updateInfo,
         ts,
         ts,
       )
@@ -474,8 +500,8 @@ export async function addSourceFromScript(input: {
 
   getDb()
     .prepare(
-      `INSERT INTO sources (id, name, url, mirror_url, local_path, enabled, status, platforms, last_checked_at, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sources (id, name, url, mirror_url, local_path, enabled, status, platforms, last_checked_at, last_error, update_info_json, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -487,6 +513,7 @@ export async function addSourceFromScript(input: {
       JSON.stringify(probed.platforms),
       ts,
       probed.lastError,
+      encodeUpdateInfo(probed.updateInfo),
       ts,
       ts,
     )
@@ -534,7 +561,7 @@ export async function saveSourceScript(
   const ts = nowIso()
   getDb()
     .prepare(
-      `UPDATE sources SET name=?, local_path=?, status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+      `UPDATE sources SET name=?, local_path=?, status=?, platforms=?, last_checked_at=?, last_error=?, update_info_json=?, updated_at=? WHERE id=?`,
     )
     .run(
       name,
@@ -543,6 +570,7 @@ export async function saveSourceScript(
       JSON.stringify(probed.platforms),
       ts,
       probed.lastError,
+      encodeUpdateInfo(probed.updateInfo),
       ts,
       id,
     )
@@ -564,6 +592,29 @@ export async function refreshSourceScriptFromUrl(id: string): Promise<SourceRow>
     url: row.url,
     mirrorUrl: row.mirror_url || undefined,
   })
+}
+
+/**
+ * 按检测得到的 updateUrl 一键更新脚本（仅直链 .js）。
+ * 不改动音源登记 URL，只覆盖本地脚本内容。
+ */
+export async function applySourceUpdateFromInfo(id: string): Promise<SourceRow> {
+  const row = getSource(id)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '音源不存在' })
+  const info = parseSourceUpdateInfoJson(row.update_info_json)
+  const updateUrl = info?.updateUrl?.trim()
+  if (!updateUrl) {
+    throw createError({ statusCode: 400, statusMessage: '该音源没有可用的更新链接' })
+  }
+  if (!isDirectSourceScriptUrl(updateUrl)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: '更新链接不是可直接下载的脚本，请打开说明页手动更新',
+      data: { updateUrl },
+    })
+  }
+  const script = await fetchSourceScript(updateUrl)
+  return await saveSourceScript(id, { script })
 }
 
 export type FileUploadConflict = {
@@ -932,13 +983,14 @@ export async function checkSources(
             })
             getDb()
               .prepare(
-                `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, updated_at=? WHERE id=?`,
+                `UPDATE sources SET status=?, platforms=?, last_checked_at=?, last_error=?, update_info_json=?, updated_at=? WHERE id=?`,
               )
               .run(
                 probed.status,
                 JSON.stringify(probed.platforms),
                 ts,
                 probed.lastError,
+                encodeUpdateInfo(probed.updateInfo),
                 ts,
                 row.id,
               )

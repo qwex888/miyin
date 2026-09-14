@@ -10,6 +10,11 @@ import { promisify } from 'node:util'
 import { inspect } from 'node:util'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { SourceLogLevel } from '#shared/sourceBatchProgress'
+import {
+  mergeSourceUpdateInfo,
+  parseSourceUpdateHint,
+  type SourceUpdateInfo,
+} from '#shared/sourceUpdate'
 
 const inflateAsync = promisify(zlibInflate)
 const deflateAsync = promisify(zlibDeflate)
@@ -69,6 +74,8 @@ export type LxSourceHandle = {
   sourceKey: string
   /** 脚本 checkUpdate / updateAlert 推送的提示（如版本过旧） */
   updateAlerts: string[]
+  /** 结构化更新信息（版本 / 下载或说明链接） */
+  updateInfo: SourceUpdateInfo | null
 }
 
 const LOAD_TIMEOUT_MS = Number(process.env.MIYIN_SOURCE_LOAD_TIMEOUT_MS || 5000)
@@ -495,6 +502,7 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
 
   const handlers: Array<(payload: any) => any> = []
   const updateAlerts: string[] = []
+  let updateInfo: SourceUpdateInfo | null = null
   let platforms: string[] = []
   let qualityMap: Record<string, string[]> = {}
   let disposed = false
@@ -504,6 +512,15 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
     resolveInit = resolve
   })
   const timers = new Set<NodeJS.Timeout>()
+
+  const ingestUpdateHints = (...args: unknown[]) => {
+    for (const arg of args) {
+      updateInfo = mergeSourceUpdateInfo(updateInfo, parseSourceUpdateHint(arg))
+    }
+    if (args.length > 1) {
+      updateInfo = mergeSourceUpdateInfo(updateInfo, parseSourceUpdateHint(formatSourceLogArgs(args)))
+    }
+  }
 
   const EVENT_NAMES = {
     request: 'request',
@@ -551,7 +568,9 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
   const failLoad = (message: string): never => {
     for (const t of timers) safeClear(t)
     recordFailure(localPath)
-    throw new Error(message)
+    const err = new Error(message) as Error & { updateInfo?: SourceUpdateInfo | null }
+    err.updateInfo = updateInfo
+    throw err
   }
 
   const parentRequire = createRequire(import.meta.url)
@@ -589,8 +608,11 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
       }
       // updateAlert：记录供检测展示（如脚本版本过旧）
       if (name === EVENT_NAMES.updateAlert) {
+        ingestUpdateHints(payload)
         const text = String(payload?.log || payload?.message || payload || '').trim()
         if (text) updateAlerts.push(text)
+        else if (updateInfo?.description) updateAlerts.push(updateInfo.description)
+        else if (updateInfo?.version) updateAlerts.push(`发现新版本 v${updateInfo.version}`)
         emitSourceLog('warn', 'updateAlert', text || payload)
       }
       return Promise.resolve()
@@ -599,10 +621,22 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
 
   const sandbox: Record<string, any> = {
     console: {
-      log: (...a: any[]) => emitSourceLog('log', ...a),
-      warn: (...a: any[]) => emitSourceLog('warn', ...a),
-      error: (...a: any[]) => emitSourceLog('error', ...a),
-      info: (...a: any[]) => emitSourceLog('info', ...a),
+      log: (...a: any[]) => {
+        ingestUpdateHints(...a)
+        emitSourceLog('log', ...a)
+      },
+      warn: (...a: any[]) => {
+        ingestUpdateHints(...a)
+        emitSourceLog('warn', ...a)
+      },
+      error: (...a: any[]) => {
+        ingestUpdateHints(...a)
+        emitSourceLog('error', ...a)
+      },
+      info: (...a: any[]) => {
+        ingestUpdateHints(...a)
+        emitSourceLog('info', ...a)
+      },
       group: () => {},
       groupEnd: () => {},
     },
@@ -631,7 +665,14 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
     rejectionGuard.release()
     recordFailure(localPath)
     if (String(err?.message || err).includes('Script execution timed out')) {
-      throw new Error('音源脚本初始化超时（疑似死循环）')
+      const timeoutErr = new Error('音源脚本初始化超时（疑似死循环）') as Error & {
+        updateInfo?: SourceUpdateInfo | null
+      }
+      timeoutErr.updateInfo = updateInfo
+      throw timeoutErr
+    }
+    if (err && typeof err === 'object') {
+      ;(err as Error & { updateInfo?: SourceUpdateInfo | null }).updateInfo = updateInfo
     }
     throw err
   }
@@ -693,6 +734,9 @@ export async function loadLxSource(localPath: string, opts?: { bypassCache?: boo
     platforms,
     qualityMap,
     updateAlerts,
+    get updateInfo() {
+      return updateInfo
+    },
     getMusicUrl,
     dispose() {
       disposed = true

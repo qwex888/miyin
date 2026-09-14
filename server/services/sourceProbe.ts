@@ -7,6 +7,11 @@ import {
 } from './sourceRuntime'
 import { withTimeout } from '../utils/sourceBatchTimeout'
 import { type SourceLogReporter } from '#shared/sourceBatchProgress'
+import {
+  mergeSourceUpdateInfo,
+  parseSourceUpdateHint,
+  type SourceUpdateInfo,
+} from '#shared/sourceUpdate'
 
 /** 探针优先尝试的平台顺序 */
 export const PROBE_PLATFORM_ORDER = ['wy', 'kw', 'kg', 'tx', 'mg'] as const
@@ -41,6 +46,8 @@ export type SourceProbeResult = {
   lastError: string | null
   /** 探针过程中收集的日志行（已带 [level] 前缀） */
   logs: string[]
+  /** 脚本自检发现的更新信息 */
+  updateInfo?: SourceUpdateInfo | null
 }
 
 export type ProbeTarget = {
@@ -227,21 +234,30 @@ export async function probeLocalScript(
       handle = await loadLxSource(localPath, { bypassCache: true })
       const netErrs = await settleSourceNetworkErrors(guard)
       const probed = await probeLoadedHandle(handle, netErrs)
+      const updateInfo =
+        handle.updateInfo ||
+        mergeSourceUpdateInfo(...collected.map((line) => parseSourceUpdateHint(line)))
       return {
         platforms: probed.platforms,
         status: probed.status,
         lastError: probed.lastError,
         logs: collected.slice(),
+        updateInfo,
       }
     } catch (err: any) {
       const summary = classifySourceError(err?.message || String(err), {
         updateAlerts: handle?.updateAlerts,
       })
+      const updateInfo =
+        (err?.updateInfo as SourceUpdateInfo | null | undefined) ||
+        handle?.updateInfo ||
+        mergeSourceUpdateInfo(...collected.map((line) => parseSourceUpdateHint(line)))
       return {
         platforms: handle?.platforms || [],
         status: 'dead',
         lastError: summary,
         logs: collected.slice(),
+        updateInfo,
       }
     } finally {
       handle?.dispose()
