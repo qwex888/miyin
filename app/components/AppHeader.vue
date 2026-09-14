@@ -222,7 +222,6 @@ onMounted(() => startWatching())
   .header {
     gap: 8px;
     padding: 8px 12px;
-    padding-top: calc(8px + env(safe-area-inset-top, 0px));
   }
   .desktop-nav {
     display: none;

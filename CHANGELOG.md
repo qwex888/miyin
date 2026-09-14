@@ -11,6 +11,15 @@
 - 追加条目：`pnpm changelog:add <类型> "描述" [--author 用户名] [--pr 编号]`
 
 ## [Unreleased]
+### Fixed
+
+- 试听取链中展示「取链中…」，切换曲目或关闭时取消上一请求并停止缓冲 (@qwex888)
+
+- 网易/QQ/酷狗歌单解析补全 musicInfo，支持同平台 id 直通入队，避免二次搜索失败导致队列为空；批量入队无可用音源时不再假成功 (@qwex888)
+
+### Changed
+
+- 接入 @vueuse/nuxt，底部导航用 useScreenSafeArea 适配多机型安全区 (@qwex888)
 
 ## [0.5.0] - 2026-09-02
 

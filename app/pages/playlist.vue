@@ -259,7 +259,7 @@ async function enqueueAll() {
 async function prepareSelectedDownload() {
   if (!preview.value || !selected.value.size) return
   const rawTracks = preview.value.tracks.filter((_, i) => selected.value.has(i))
-  // 深拷贝原始曲目并清除之前的匹配状态，杜绝污染或残留状态
+  // 保留解析得到的 musicInfo / matchMethod，供同平台 id 直通；无 musicInfo 的仍走搜索匹配
   const tracks: Track[] = rawTracks.map((t) => ({
     title: t.title,
     artist: t.artist,
@@ -267,7 +267,10 @@ async function prepareSelectedDownload() {
     duration: t.duration,
     platform: t.platform,
     externalId: t.externalId,
+    musicInfo: t.musicInfo,
+    matchMethod: t.matchMethod,
   }))
+  const allowManualBypass = tracks.some((t) => Boolean(t.musicInfo))
 
   matchRows.value = []
   confirmChoices.value = {}
@@ -283,7 +286,7 @@ async function prepareSelectedDownload() {
   try {
     let doneCount = 0
     const res = await fetchPlaylistMatchNdjson(
-      { tracks, concurrency: 8, allowManualBypass: false },
+      { tracks, concurrency: 8, allowManualBypass },
       {
         signal: abortController.signal,
         onStart: (total) => {

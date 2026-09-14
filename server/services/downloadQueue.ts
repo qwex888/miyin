@@ -360,7 +360,7 @@ export function batchEnqueueDownload(
   items: EnqueueDownloadInput[],
   opts?: { silent?: boolean },
 ): { total: number; enqueued: number; ids: string[] } {
-  if (!items.length) return { total: 0, enqueued: 0, ids: [] }
+  if (!items.length) return { total: 0, enqueued: 0, ids: [], results: [] }
 
   const settings = getSettings()
   assertDownloadDirWritable(settings.downloadDir)
@@ -383,12 +383,19 @@ export function batchEnqueueDownload(
   )
 
   const enqueuedIds: string[] = []
+  const itemResults: Array<{ ok: boolean; id?: string; error?: string }> = []
   const ts = nowIso()
 
   const runInsertTransaction = db.transaction((taskList: EnqueueDownloadInput[]) => {
     for (const item of taskList) {
       const sourceId = item.sourceId || getSourceForPlatform(item.platform)
-      if (!sourceId) continue
+      if (!sourceId) {
+        itemResults.push({
+          ok: false,
+          error: `没有可用音源支持平台 ${item.platform}`,
+        })
+        continue
+      }
 
       const id = randomUUID()
       const musicPayload = {
@@ -414,6 +421,7 @@ export function batchEnqueueDownload(
         ts,
       )
       enqueuedIds.push(id)
+      itemResults.push({ ok: true, id })
     }
   })
 
@@ -436,6 +444,7 @@ export function batchEnqueueDownload(
     total: items.length,
     enqueued: enqueuedIds.length,
     ids: enqueuedIds,
+    results: itemResults,
   }
 }
 

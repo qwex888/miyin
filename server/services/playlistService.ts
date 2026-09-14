@@ -257,17 +257,48 @@ function songMid(song: any): string {
   return String(song?.mid || song?.songmid || song?.song_mid || '')
 }
 
+/** 用平台 id 合成音源脚本可用的最小 musicInfo，供歌单直通入队 */
+function buildMusicInfoFromIds(input: {
+  platform: string
+  externalId: string
+  title: string
+  artist: string
+  album?: string
+}): Record<string, unknown> {
+  return {
+    name: input.title,
+    singer: input.artist,
+    albumName: input.album || '',
+    songmid: input.externalId,
+    hash: input.externalId,
+    source: input.platform,
+  }
+}
+
 function mapQqSongs(songs: any[]): PlaylistTrackDraft[] {
   return (songs || [])
     .map((s: any) => {
       const mid = songMid(s)
+      const title = songTitle(s)
+      const artist = joinArtists(s.singer)
+      const album = albumName(s)
       return {
         externalId: mid || undefined,
-        title: songTitle(s),
-        artist: joinArtists(s.singer),
-        album: albumName(s),
+        title,
+        artist,
+        album,
         duration: Number(s.interval || 0) || undefined,
         platform: 'tx',
+        musicInfo: mid
+          ? buildMusicInfoFromIds({
+              platform: 'tx',
+              externalId: mid,
+              title,
+              artist,
+              album,
+            })
+          : undefined,
+        matchMethod: mid ? 'id' : undefined,
       } satisfies PlaylistTrackDraft
     })
     .filter((t) => t.title && t.title !== '未知')
@@ -636,13 +667,24 @@ function mapKugouPlaylistSongs(rows: unknown[]): PlaylistTrackDraft[] {
         String(song.name || song.filename || song.songname || song.fileName || ''),
       )
       const albumInfo = song.albuminfo as Record<string, unknown> | undefined
+      const album = String(song.album_name || albumInfo?.name || '')
       return {
         externalId: hash || undefined,
         title: split.title,
         artist: split.artist,
-        album: String(song.album_name || albumInfo?.name || ''),
+        album,
         duration: Number(song.duration || song.timelength || 0) || undefined,
         platform: 'kg',
+        musicInfo: hash
+          ? buildMusicInfoFromIds({
+              platform: 'kg',
+              externalId: hash,
+              title: split.title,
+              artist: split.artist,
+              album,
+            })
+          : undefined,
+        matchMethod: hash ? 'id' : undefined,
       } satisfies PlaylistTrackDraft
     })
     .filter((t) => t.title && t.title !== '未知')
@@ -1045,13 +1087,25 @@ async function parseNeteasePlaylist(
 
 function mapNeteaseSong(s: any): PlaylistTrackDraft {
   const artists = s.ar || s.artists || []
+  const externalId = String(s.id)
+  const title = s.name || '未知'
+  const artist = artists.map((a: any) => a.name).filter(Boolean).join(' / ') || '未知'
+  const album = s.al?.name || s.album?.name || ''
   return {
-    externalId: String(s.id),
-    title: s.name || '未知',
-    artist: artists.map((a: any) => a.name).filter(Boolean).join(' / ') || '未知',
-    album: s.al?.name || s.album?.name || '',
+    externalId,
+    title,
+    artist,
+    album,
     duration: Math.round((s.dt || s.duration || 0) / 1000),
     platform: 'wy',
+    musicInfo: buildMusicInfoFromIds({
+      platform: 'wy',
+      externalId,
+      title,
+      artist,
+      album,
+    }),
+    matchMethod: 'id',
   }
 }
 
@@ -1344,17 +1398,33 @@ export async function matchAndEnqueuePlaylist(
       throw err
     }
     try {
-      if (track.musicInfo) {
-        results[index] = { title: track.title, ok: true, method: track.matchMethod || 'manual' }
+      const directMusicInfo =
+        track.musicInfo ||
+        (track.externalId
+          ? buildMusicInfoFromIds({
+              platform: track.platform,
+              externalId: track.externalId,
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+            })
+          : null)
+
+      if (directMusicInfo) {
+        results[index] = {
+          title: track.title,
+          ok: true,
+          method: track.matchMethod || (track.musicInfo ? 'manual' : 'id'),
+        }
         toEnqueueList.push({
           title: track.title,
           artist: track.artist,
           album: track.album,
           platform: track.platform,
           quality: opts?.quality,
-          musicInfo: track.musicInfo,
+          musicInfo: directMusicInfo,
           externalId: track.externalId,
-          matchMethod: track.matchMethod || 'manual',
+          matchMethod: track.matchMethod || (track.musicInfo ? 'manual' : 'id'),
           downloadLyric: opts?.downloadLyric,
           lyricMode: opts?.lyricMode,
           batchId,
@@ -1485,12 +1555,17 @@ export async function matchAndEnqueuePlaylist(
 
   // 使用高性能分批事务批量入库，并静默单条 emitTask 以消除瞬时广播与 WAL 压力
   if (toEnqueueList.length > 0) {
-    const { ids } = batchEnqueueDownload(toEnqueueList, { silent: true })
+    const batch = batchEnqueueDownload(toEnqueueList, { silent: true })
     for (let j = 0; j < toEnqueueList.length; j++) {
       const item = toEnqueueList[j]!
       const res = results[item.resultIndex]
-      if (res && ids[j]) {
-        res.taskId = ids[j]
+      const br = batch.results[j]
+      if (!res) continue
+      if (br?.ok && br.id) {
+        res.taskId = br.id
+      } else {
+        res.ok = false
+        res.error = br?.error || '入队失败'
       }
     }
   }

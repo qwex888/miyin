@@ -4,6 +4,12 @@ import { APP_NAV_LINKS, navLinkActive } from '~/utils/nav'
 const route = useRoute()
 const { activeCount } = useDownloadEvents()
 const { showBadge: showUpdateBadge, requestOpenOnSettings } = useAppUpdate()
+const { bottom: safeAreaBottom } = useScreenSafeArea()
+
+const bottomNavStyle = computed(() => ({
+  // useScreenSafeArea 返回已解析的 inset 字符串（如 "34px"），比纯 CSS env() 在部分 WebView 更稳
+  paddingBottom: `calc(6px + ${safeAreaBottom.value || '0px'})`,
+}))
 
 function onNavClick(to: string) {
   if (to === '/settings' && showUpdateBadge.value) requestOpenOnSettings()
@@ -11,7 +17,7 @@ function onNavClick(to: string) {
 </script>
 
 <template>
-  <nav class="bottom-nav" aria-label="主导航">
+  <nav class="bottom-nav" aria-label="主导航" :style="bottomNavStyle">
     <NuxtLink
       v-for="l in APP_NAV_LINKS"
       :key="l.to"
@@ -36,7 +42,7 @@ function onNavClick(to: string) {
   flex-shrink: 0;
   grid-template-columns: repeat(5, 1fr);
   gap: 2px;
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 4px 6px;
   background: color-mix(in oklab, var(--surface) 92%, transparent);
   border-top: 1px solid var(--border);
   backdrop-filter: blur(12px);

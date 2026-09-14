@@ -51,6 +51,8 @@ const { play, current, playing, toggle, stop } = usePlayer()
 const toast = useToast()
 const detailSheetOpen = ref(false)
 const downloading = ref(false)
+const previewing = ref(false)
+let previewAbort: AbortController | null = null
 const enqueueResult = ref<EnqueueResultPayload | null>(null)
 const showEnqueueResult = ref(false)
 const {
@@ -259,6 +261,14 @@ async function openAlbumFromTrack(t: Track) {
 
 async function preview() {
   if (!selected.value) return
+  if (previewAbort) {
+    previewAbort.abort()
+    previewAbort = null
+  }
+  stop()
+  const abortController = new AbortController()
+  previewAbort = abortController
+  previewing.value = true
   try {
     const res = await $fetch<{ url: string; quality: string }>('/api/preview', {
       method: 'POST',
@@ -267,15 +277,34 @@ async function preview() {
         musicInfo: selected.value.musicInfo,
         quality: quality.value,
       },
+      signal: abortController.signal,
     })
+    if (abortController.signal.aborted || previewAbort !== abortController) return
     await play({
       title: selected.value.title,
       artist: selected.value.artist,
       url: res.url,
     })
   } catch (e: unknown) {
+    if (abortController.signal.aborted || previewAbort !== abortController) return
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError') return
     toast.error(apiErrorMessage(e, '试听失败'))
+  } finally {
+    if (previewAbort === abortController) {
+      previewAbort = null
+      previewing.value = false
+    }
   }
+}
+
+function stopPreview() {
+  if (previewAbort) {
+    previewAbort.abort()
+    previewAbort = null
+  }
+  previewing.value = false
+  stop()
 }
 
 async function download() {
@@ -526,7 +555,9 @@ async function retryFailedEnqueue() {
             </select>
           </label>
           <div class="actions">
-            <button class="btn btn-ghost" type="button" @click="preview">试听</button>
+            <button class="btn btn-ghost" type="button" @click="preview">
+              {{ previewing ? '取链中…' : '试听' }}
+            </button>
             <button class="btn" type="button" @click="download">下载</button>
           </div>
         </template>
@@ -596,7 +627,9 @@ async function retryFailedEnqueue() {
               </select>
             </label>
             <div class="actions">
-              <button class="btn btn-ghost" type="button" @click="preview">试听</button>
+              <button class="btn btn-ghost" type="button" @click="preview">
+                {{ previewing ? '取链中…' : '试听' }}
+              </button>
               <button class="btn" type="button" :disabled="downloading" @click="download">
                 {{ downloading ? '入队中…' : '下载' }}
               </button>
@@ -623,7 +656,7 @@ async function retryFailedEnqueue() {
             <path d="M8 5.5v13l11-6.5-11-6.5z" fill="currentColor" />
           </svg>
         </button>
-        <button class="mini-icon-btn" type="button" aria-label="关闭试听" @click="stop">
+        <button class="mini-icon-btn" type="button" aria-label="关闭试听" @click="stopPreview">
           <svg class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
             <path
               d="M6.4 6.4a1 1 0 0 1 1.4 0L12 10.6l4.2-4.2a1 1 0 1 1 1.4 1.4L13.4 12l4.2 4.2a1 1 0 0 1-1.4 1.4L12 13.4l-4.2 4.2a1 1 0 0 1-1.4-1.4L10.6 12 6.4 7.8a1 1 0 0 1 0-1.4z"
