@@ -6,10 +6,11 @@ import {
   statSync,
   writeFileSync,
   renameSync,
+  mkdirSync,
 } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import PQueue from 'p-queue'
 import { getDb, checkpointAndShrinkDb } from '../utils/db'
@@ -119,10 +120,25 @@ function nowIso() {
   return new Date().toISOString()
 }
 
-function sanitizeFilename(name: string) {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'unknown'
+/** Sanitize one path segment; `/` `\` become `_` so metadata cannot inject directories. */
+function sanitizePathSegment(name: string) {
+  return name.replace(/[\\/:*?"<>|]/g, '_').trim()
 }
 
+/** Split a filled template into sanitized relative path segments (`/` as dirs). */
+function pathSegmentsFromFilled(filled: string, emptyFallback?: string) {
+  const segments = filled
+    .split(/[/\\]+/)
+    .map((s) => sanitizePathSegment(s))
+    .filter((s) => s && s !== '.' && s !== '..')
+  if (segments.length) return segments.join('/')
+  return emptyFallback ?? ''
+}
+
+/**
+ * Apply download name template. `/` or `\` in the template create subdirectories;
+ * each segment is sanitized. Empty segments (e.g. missing `{album}`) and `.` / `..` are dropped.
+ */
 export function applyNameTemplate(
   template: string,
   meta: {
@@ -135,16 +151,64 @@ export function applyNameTemplate(
     track?: string | number
   },
 ) {
-  return sanitizeFilename(
-    template
-      .replaceAll('{artist}', meta.artist || '未知')
-      .replaceAll('{title}', meta.title || '未知')
-      .replaceAll('{album}', meta.album || '')
-      .replaceAll('{platform}', meta.platform || '')
-      .replaceAll('{quality}', meta.quality || '')
-      .replaceAll('{id}', meta.id || '')
-      .replaceAll('{track}', meta.track != null ? String(meta.track) : ''),
-  )
+  const filled = template
+    .replaceAll('{artist}', sanitizePathSegment(meta.artist || '未知') || '未知')
+    .replaceAll('{title}', sanitizePathSegment(meta.title || '未知') || '未知')
+    .replaceAll('{album}', sanitizePathSegment(meta.album || ''))
+    .replaceAll('{platform}', sanitizePathSegment(meta.platform || ''))
+    .replaceAll('{quality}', sanitizePathSegment(meta.quality || ''))
+    .replaceAll('{id}', sanitizePathSegment(meta.id || ''))
+    .replaceAll(
+      '{track}',
+      meta.track != null ? sanitizePathSegment(String(meta.track)) : '',
+    )
+
+  return pathSegmentsFromFilled(filled, 'unknown')
+}
+
+/** Album-level folder template (`{album}` / `{artist}` / `{platform}`); empty if nothing left. */
+export function applyFolderTemplate(
+  template: string,
+  meta: { album?: string; artist?: string; platform?: string },
+) {
+  const filled = template
+    .replaceAll('{artist}', sanitizePathSegment(meta.artist || ''))
+    .replaceAll('{album}', sanitizePathSegment(meta.album || ''))
+    .replaceAll('{platform}', sanitizePathSegment(meta.platform || ''))
+  return pathSegmentsFromFilled(filled, '')
+}
+
+/** File name from global template, optionally under a resolved album folder prefix. */
+export function buildDownloadRelativeBase(
+  nameTemplate: string,
+  trackMeta: {
+    artist: string
+    title: string
+    album?: string
+    platform?: string
+    quality?: string
+    id?: string
+    track?: string | number
+  },
+  folderPrefix?: string | null,
+) {
+  const fileBase = applyNameTemplate(nameTemplate, trackMeta)
+  const prefix = pathSegmentsFromFilled(folderPrefix || '', '')
+  return prefix ? `${prefix}/${fileBase}` : fileBase
+}
+
+/** Join download root with a template-relative base (may contain `/` segments). */
+export function joinDownloadRelative(root: string, relativeBase: string, ext?: string) {
+  const parts = relativeBase.split('/').filter(Boolean)
+  if (ext) {
+    const last = parts.pop() || 'unknown'
+    parts.push(`${last}.${ext}`)
+  }
+  return join(root, ...parts)
+}
+
+function ensureParentDir(filePath: string) {
+  mkdirSync(dirname(filePath), { recursive: true })
 }
 
 export type ListTasksQuery = {
@@ -303,6 +367,8 @@ export type EnqueueDownloadInput = {
   matchMethod?: string
   downloadLyric?: boolean
   lyricMode?: 'external' | 'embedded'
+  /** Resolved relative folder prefix for this task (album download); stored in music_info_json */
+  folderPrefix?: string
   batchId?: string
   playlistUrl?: string
 }
@@ -323,6 +389,7 @@ export function enqueueDownload(input: EnqueueDownloadInput) {
     ...input.musicInfo,
     __downloadLyric: input.downloadLyric ?? settings.downloadLyric,
     __lyricMode: input.lyricMode ?? settings.lyricMode,
+    ...(input.folderPrefix ? { __folderPrefix: input.folderPrefix } : {}),
   }
 
   getDb()
@@ -402,6 +469,7 @@ export function batchEnqueueDownload(
         ...item.musicInfo,
         __downloadLyric: item.downloadLyric ?? settings.downloadLyric,
         __lyricMode: item.lyricMode ?? settings.lyricMode,
+        ...(item.folderPrefix ? { __folderPrefix: item.folderPrefix } : {}),
       }
 
       insertStmt.run(
@@ -869,17 +937,24 @@ async function processTask(task: DownloadTaskRow) {
 
     const dir = getDownloadDir(settings.downloadDir)
     const trackNo = (musicInfo.track || musicInfo.trackNo || musicInfo.tracknum || musicInfo.no) as string | number | undefined
-    const base = applyNameTemplate(settings.nameTemplate, {
-      artist: task.artist,
-      title: task.title,
-      album: task.album || undefined,
-      platform: task.platform,
-      quality,
-      id: task.external_id || undefined,
-      track: trackNo,
-    })
+    const folderPrefix =
+      typeof musicInfo.__folderPrefix === 'string' ? musicInfo.__folderPrefix : null
+    const base = buildDownloadRelativeBase(
+      settings.nameTemplate,
+      {
+        artist: task.artist,
+        title: task.title,
+        album: task.album || undefined,
+        platform: task.platform,
+        quality,
+        id: task.external_id || undefined,
+        track: trackNo,
+      },
+      folderPrefix,
+    )
     const ext = guessExt(url, quality)
-    filePath = join(dir, `${base}.${ext}`)
+    filePath = joinDownloadRelative(dir, base, ext)
+    ensureParentDir(filePath)
     await downloadFile(
       url,
       filePath,
@@ -942,7 +1017,8 @@ async function processTask(task: DownloadTaskRow) {
     }
 
     if (lrcText && lyricMode === 'external') {
-      lyricPath = join(dir, `${base}.lrc`)
+      lyricPath = joinDownloadRelative(dir, base, 'lrc')
+      ensureParentDir(lyricPath)
       writeFileSync(lyricPath, lrcText, 'utf8')
     }
 
@@ -1075,9 +1151,10 @@ function alignFileExtension(filePath: string, base: string, dir: string): string
   if (!sniffed) return filePath
   const cur = filePath.includes('.') ? filePath.split('.').pop()!.toLowerCase() : ''
   if (cur === sniffed) return filePath
-  const next = join(dir, `${base}.${sniffed}`)
+  const next = joinDownloadRelative(dir, base, sniffed)
   if (next === filePath) return filePath
   try {
+    ensureParentDir(next)
     if (existsSync(next) && next !== filePath) unlinkSync(next)
     renameSync(filePath, next)
     console.warn(`[download] 扩展名已纠正: .${cur || '?'} → .${sniffed}`)

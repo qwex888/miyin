@@ -1,4 +1,4 @@
-import { getSettings, NAME_TEMPLATE_VARS } from '~~/server/services/settingsService'
+import { getSettings, NAME_TEMPLATE_VARS, ALBUM_FOLDER_TEMPLATE_VARS } from '~~/server/services/settingsService'
 import { checkFfmpegAvailable } from '~~/server/services/metadataService'
 
 export default defineEventHandler(async () => {
@@ -7,6 +7,7 @@ export default defineEventHandler(async () => {
   return {
     ...settings,
     nameTemplateVars: NAME_TEMPLATE_VARS,
+    albumFolderTemplateVars: ALBUM_FOLDER_TEMPLATE_VARS,
     ffmpegAvailable: ffmpeg,
   }
 })

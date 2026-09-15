@@ -5,7 +5,11 @@ import {
   parseLrcLines,
   splitKuwoLrcList,
 } from '../server/services/lyricService'
-import { applyNameTemplate } from '../server/services/downloadQueue'
+import {
+  applyFolderTemplate,
+  applyNameTemplate,
+  buildDownloadRelativeBase,
+} from '../server/services/downloadQueue'
 import {
   decryptTxFieldToLrc,
   extractTxLyricContent,
@@ -95,7 +99,7 @@ describe('krc decode', () => {
 })
 
 describe('name template', () => {
-  it('replaces all known vars', () => {
+  it('replaces all known vars; / in template becomes path segments', () => {
     const name = applyNameTemplate('{artist} - {title} [{platform}/{quality}] #{track}', {
       artist: 'A',
       title: 'B',
@@ -103,6 +107,110 @@ describe('name template', () => {
       quality: '320k',
       track: 3,
     })
-    expect(name).toBe('A - B [wy_320k] #3')
+    // `/` is a directory separator; each segment is sanitized separately
+    expect(name).toBe('A - B [wy/320k] #3')
+  })
+
+  it('builds album subdirectory and skips empty album segment', () => {
+    expect(
+      applyNameTemplate('{album}/{artist} - {title}', {
+        artist: '周杰伦',
+        title: '晴天',
+        album: '叶惠美',
+      }),
+    ).toBe('叶惠美/周杰伦 - 晴天')
+
+    expect(
+      applyNameTemplate('{album}/{artist} - {title}', {
+        artist: '周杰伦',
+        title: '晴天',
+        album: '',
+      }),
+    ).toBe('周杰伦 - 晴天')
+  })
+
+  it('supports nested artist/album paths and strips .. segments', () => {
+    expect(
+      applyNameTemplate('{artist}/{album}/{track}. {title}', {
+        artist: 'A',
+        title: 'B',
+        album: 'C',
+        track: 1,
+      }),
+    ).toBe('A/C/1. B')
+
+    expect(
+      applyNameTemplate('../{album}/../{title}', {
+        artist: 'A',
+        title: 'B',
+        album: 'C',
+      }),
+    ).toBe('C/B')
+  })
+
+  it('sanitizes illegal characters per path segment', () => {
+    expect(
+      applyNameTemplate('{album}/{title}', {
+        artist: 'A',
+        title: 'a:b*c',
+        album: 'x/y|z',
+      }),
+    ).toBe('x_y_z/a_b_c')
+  })
+})
+
+describe('album folder prefix', () => {
+  it('resolves folder template with album-level vars', () => {
+    expect(
+      applyFolderTemplate('{album}', {
+        album: '叶惠美',
+        artist: '周杰伦',
+        platform: 'wy',
+      }),
+    ).toBe('叶惠美')
+
+    expect(
+      applyFolderTemplate('{artist} - {album}', {
+        album: '叶惠美',
+        artist: '周杰伦',
+        platform: 'wy',
+      }),
+    ).toBe('周杰伦 - 叶惠美')
+
+    expect(
+      applyFolderTemplate('{artist}/{album}', {
+        album: '叶惠美',
+        artist: '周杰伦',
+        platform: 'wy',
+      }),
+    ).toBe('周杰伦/叶惠美')
+  })
+
+  it('joins folder prefix with file name template without changing file template alone', () => {
+    const fileBase = applyNameTemplate('{artist} - {title}', {
+      artist: '周杰伦',
+      title: '晴天',
+      album: '叶惠美',
+    })
+    expect(fileBase).toBe('周杰伦 - 晴天')
+
+    expect(
+      buildDownloadRelativeBase('{artist} - {title}', {
+        artist: '周杰伦',
+        title: '晴天',
+        album: '叶惠美',
+      }, '叶惠美'),
+    ).toBe('叶惠美/周杰伦 - 晴天')
+
+    expect(
+      buildDownloadRelativeBase('{artist} - {title}', {
+        artist: '周杰伦',
+        title: '晴天',
+      }, null),
+    ).toBe('周杰伦 - 晴天')
+  })
+
+  it('returns empty when folder template resolves to nothing', () => {
+    expect(applyFolderTemplate('{album}', { album: '', artist: 'A' })).toBe('')
   })
 })

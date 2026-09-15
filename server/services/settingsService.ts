@@ -14,6 +14,10 @@ export const AppSettingsSchema = z.object({
   /** external=仅 .lrc；embedded=仅内嵌到音频 */
   lyricMode: z.enum(['external', 'embedded']).default('external'),
   nameTemplate: z.string().min(1).default('{artist} - {title}'),
+  /** 专辑下载时是否按文件夹归档（仅影响专辑入队，不改变全局命名） */
+  albumDownloadToFolder: z.boolean().default(true),
+  /** 专辑文件夹命名模板，可用 {album} {artist} {platform}，可含 / */
+  albumFolderTemplate: z.string().min(1).default('{album}'),
   autoFailover: z.boolean().default(true),
   maxAttempts: z.number().int().min(1).max(8).default(3),
 })
@@ -28,6 +32,12 @@ export const NAME_TEMPLATE_VARS = [
   { key: '{quality}', desc: '实际音质，如 320k / flac / flac24bit' },
   { key: '{id}', desc: '歌曲 externalId / songmid' },
   { key: '{track}', desc: '音轨号（有则写入，无则为空）' },
+] as const
+
+export const ALBUM_FOLDER_TEMPLATE_VARS = [
+  { key: '{album}', desc: '专辑名' },
+  { key: '{artist}', desc: '专辑歌手' },
+  { key: '{platform}', desc: '平台代号' },
 ] as const
 
 function envDownloadDir(): string | undefined {
@@ -49,6 +59,8 @@ const DEFAULTS: AppSettings = {
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',
+  albumDownloadToFolder: true,
+  albumFolderTemplate: '{album}',
   autoFailover: true,
   maxAttempts: 3,
 }
