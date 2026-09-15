@@ -34,6 +34,8 @@ pnpm build:fpk
 pnpm release          # 或 pnpm release -- patch
 ```
 
+发版时会将本次版本的 `CHANGELOG.md` 条目同步到飞牛 manifest 的 `changelog`：按顺序取去重后的前 3 条，去除 Markdown 格式和括号附注，仅保留首句，总长不超过 180 字；没有条目时显示「维护版本更新」。请将重要变化放在前面，并用简洁的用户语言描述功能与体验变化，将实现细节留在技术说明中。
+
 推送 tag 后由 Actions 构建 Docker / FPK，并在 GitHub Releases 上传 `miyin-v*.fpk`。详见 README「发布（维护者）」。
 
 ## Pull Request

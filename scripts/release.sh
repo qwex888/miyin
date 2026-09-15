@@ -99,14 +99,6 @@ node -e "
 " "$NEW_VERSION"
 info "已更新 package.json → ${NEW_VERSION}"
 
-# 飞牛 manifest
-MANIFEST="packaging/fnos/miyin/manifest"
-if [ -f "$MANIFEST" ]; then
-  sed -i.bak -E "s/^version=.*/version=${NEW_VERSION}/" "$MANIFEST"
-  rm -f "${MANIFEST}.bak"
-  info "已更新 ${MANIFEST} → ${NEW_VERSION}"
-fi
-
 # CHANGELOG: Unreleased → 新版本段
 TODAY=$(date +%Y-%m-%d)
 python3 - "$NEW_VERSION" "$CURRENT" "$TODAY" <<'PY'
@@ -124,11 +116,15 @@ if not m:
 
 body = m.group(2).strip()
 if not body:
-    body = "### Changed\n\n- 维护版本发布"
+    body = "### Changed\n\n- 维护版本更新"
 
 # 若目标版本段已存在则只清空 Unreleased，不重复插入
 ver_header = f"## [{new_ver}]"
-if ver_header in text:
+version_section = re.search(
+    rf"^## \[{re.escape(new_ver)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S
+)
+if version_section:
+    body = version_section.group(1).strip()
     text = text[: m.start()] + m.group(1) + "\n" + m.group(3) + text[m.end() :]
 else:
     inserted = f"{m.group(1)}\n{ver_header} - {today}\n\n{body}\n{m.group(3)}"
@@ -166,6 +162,39 @@ for ver, line in hist:
 
 path.write_text(text_body + "\n".join(links) + "\n", encoding="utf-8")
 print(f"CHANGELOG → [{new_ver}]")
+
+# 飞牛更新提示只保留用户摘要，限制条数和长度，避免照搬详细说明。
+manifest_path = Path("packaging/fnos/miyin/manifest")
+if manifest_path.is_file():
+    notes = []
+    for note in re.findall(r"^[-*][ \t]+(.+)$", body, re.M):
+        note = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", note)
+        note = re.sub(r"[（(][^()（）]*[)）]", "", note)
+        # 仅移除成对格式标记，保留行内代码、配置名与通配符中的字面字符。
+        note = re.sub(
+            r"`([^`]+)`|(\*\*|__|~~)(.+?)\2|(?<![A-Za-z0-9])([*_])(\S(?:.*?\S)?)\4(?![A-Za-z0-9])",
+            lambda match: match[1] or match[3] or match[5],
+            note,
+        )
+        note = re.split(r"[。！？；;!?]", note, maxsplit=1)[0]
+        note = re.sub(r"\s+", " ", note).strip(" ，,！!")
+        if note and note not in notes:
+            notes.append(note)
+        if len(notes) == 3:
+            break
+
+    summary = "；".join(notes) + "。" if notes else "维护版本更新。"
+    if len(summary) > 180:
+        summary = summary[:179].rstrip(" ，,；;。") + "…"
+
+    manifest = manifest_path.read_text(encoding="utf-8")
+    manifest = re.sub(r"^version=.*$", f"version={new_ver}", manifest, flags=re.M)
+    if re.search(r"^changelog=", manifest, re.M):
+        manifest = re.sub(r"^changelog=.*$", lambda _: f"changelog={summary}", manifest, flags=re.M)
+    else:
+        manifest = manifest.rstrip("\n") + f"\nchangelog={summary}\n"
+    manifest_path.write_text(manifest, encoding="utf-8")
+    print(f"{manifest_path} → {new_ver}，更新说明：{summary}")
 PY
 
 chmod +x scripts/generate-release-notes.sh scripts/changelog-entry.sh
