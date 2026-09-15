@@ -140,7 +140,7 @@ jobs:
           ls -lah dist/*.fpk
 
       - name: Upload FPK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: miyin-fpk
           path: dist/*.fpk
