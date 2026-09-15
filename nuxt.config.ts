@@ -26,6 +26,16 @@ export default defineNuxtConfig({
       // 禁止双指缩放（H5）
       viewport:
         'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
+      script: [
+        {
+          // iOS 15.0–15.3 兼容：devalue 解析 __NUXT_DATA__ 时用到 Object.hasOwn（Safari 15.4+），
+          // 缺失会导致启动即抛错白屏；内联脚本先于 module 入口执行，可在 payload 解析前补齐
+          innerHTML:
+            'if(!Object.hasOwn)Object.hasOwn=function(o,k){return Object.prototype.hasOwnProperty.call(o,k)};' +
+            'if(!Array.prototype.findLast)Array.prototype.findLast=function(f,t){for(var i=this.length-1;i>=0;i--)if(f.call(t,this[i],i,this))return this[i]};' +
+            'if(!Array.prototype.findLastIndex)Array.prototype.findLastIndex=function(f,t){for(var i=this.length-1;i>=0;i--)if(f.call(t,this[i],i,this))return i;return-1};',
+        },
+      ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: `${normalizedBase}favicon.svg` },
         { rel: 'apple-touch-icon', href: `${normalizedBase}logo-192.png` },

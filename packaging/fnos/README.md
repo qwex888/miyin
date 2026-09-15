@@ -64,7 +64,7 @@ packaging/fnos/
 2. 安装官方 `fnpack`，执行本脚本打出 **x86+ARM 胖包** `.fpk`
 3. 上传到 GitHub Release（如 `miyin-v0.2.0.fpk`）
 
-本地无 `fnpack` 时脚本会准备好 `app/server` 后退出 0；CI 设置 `REQUIRE_FNPACK=1` 强制成功。
+本地无 `fnpack` 时脚本会自动下载官方 CLI 到 `tools/fnpack`（等价于 `pnpm download:fnpack`）；也可用 `FNPACK_BIN` 指定已有二进制。CI 设置 `REQUIRE_FNPACK=1` 在下载失败时强制报错。产物除 `packaging/fnos/miyin/miyin.fpk` 外，还会复制一份到 `dist/miyin-v<version>.fpk`。
 
 ```bash
 MIYIN_VERSION=0.2.0 REQUIRE_FNPACK=1 ./packaging/fnos/scripts/build-fpk.sh
