@@ -1,4 +1,5 @@
 import { platformLabel } from '#shared/platforms'
+import { SEARCH_PAGE_SIZE } from '#shared/searchPagination'
 import {
   cleanArtist,
   parseLooseJson,
@@ -204,8 +205,8 @@ export function mapWyAlbumDetail(data: any): AlbumDetail {
 }
 
 async function searchWyAlbums(keyword: string, page: number): Promise<SearchAlbum[]> {
-  const offset = (page - 1) * 30
-  const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=10&limit=30&offset=${offset}`
+  const offset = (page - 1) * SEARCH_PAGE_SIZE
+  const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=10&limit=${SEARCH_PAGE_SIZE}&offset=${offset}`
   const data = await fetchJson(url, { headers: { Referer: 'https://music.163.com/' } })
   return mapWySearchAlbums(data?.result?.albums || [])
 }
@@ -305,7 +306,7 @@ async function searchTxAlbums(keyword: string, page: number): Promise<SearchAlbu
   // 带 new_json/aggr 等参数时 album.list 常为空；精简参数与单曲搜索一致更稳
   const url =
     `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?` +
-    `w=${encodeURIComponent(keyword)}&p=${page}&n=30&format=json&t=8`
+    `w=${encodeURIComponent(keyword)}&p=${page}&n=${SEARCH_PAGE_SIZE}&format=json&t=8`
   const data = await fetchJson(url, { headers: QQ_HEADERS })
   return mapTxSearchAlbums(data?.data?.album?.list || [])
 }
@@ -384,7 +385,7 @@ export function mapKwAlbumDetail(data: any, albumId: string): AlbumDetail {
 }
 
 async function searchKwAlbums(keyword: string, page: number): Promise<SearchAlbum[]> {
-  const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=album&client=kt&pn=${page - 1}&rn=30&rformat=json&encoding=utf8`
+  const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=album&client=kt&pn=${page - 1}&rn=${SEARCH_PAGE_SIZE}&rformat=json&encoding=utf8`
   const data = await fetchJson(url)
   return mapKwSearchAlbums(data?.abslist || data?.albumlist || [])
 }
@@ -534,7 +535,7 @@ async function searchKgAlbums(keyword: string, page: number): Promise<SearchAlbu
   // complexsearch /v2/search/album 已 404；mobilecdn v3 无需签名
   const url =
     `http://mobilecdn.kugou.com/api/v3/search/album?keyword=${encodeURIComponent(keyword)}` +
-    `&page=${page}&pagesize=30&iscorrect=1&version=9108`
+    `&page=${page}&pagesize=${SEARCH_PAGE_SIZE}&iscorrect=1&version=9108`
   const data = await fetchJson(url, { headers: { Referer: 'https://www.kugou.com/' } })
   if (data?.status === 0 || data?.errcode) {
     throw new Error(data?.error_msg || data?.error || `errcode ${data?.errcode}`)

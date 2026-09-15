@@ -5,6 +5,7 @@ import {
   platformLabel,
   type DownloadQuality,
 } from '~/utils/mediaLabels'
+import { searchPageHasMore } from '#shared/searchPagination'
 import type { EnqueueResultPayload } from '~/components/EnqueueResultDialog.vue'
 import type { AlbumDetailData } from '~/components/AlbumDetailPanel.vue'
 import type { SearchAlbumItem } from '~/components/AlbumResultList.vue'
@@ -43,7 +44,12 @@ const selected = ref<Track | null>(null)
 const selectedAlbum = ref<SearchAlbumItem | null>(null)
 const albumDetail = ref<AlbumDetailData | null>(null)
 const loading = ref(false)
+const loadingMore = ref(false)
 const loadingText = ref('搜索中…')
+const currentPage = ref(1)
+const hasMore = ref(false)
+/** 递增以作废过期的搜索 / 加载更多响应 */
+let searchGen = 0
 const quality = ref<DownloadQuality>('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
@@ -142,9 +148,17 @@ function resetAlbumView() {
   selectedAlbum.value = null
 }
 
+function resetSearchPaging() {
+  currentPage.value = 1
+  hasMore.value = false
+  loadingMore.value = false
+}
+
 async function doSearch() {
   if (!keyword.value.trim()) return
+  const gen = ++searchGen
   resetAlbumView()
+  resetSearchPaging()
   loadingText.value = '搜索中…'
   loading.value = true
   try {
@@ -162,10 +176,14 @@ async function doSearch() {
         type: searchType.value,
       },
     })
+    if (gen !== searchGen) return
     if (res.platforms?.length) platforms.value = res.platforms
     ensureAlbumPlatform()
+    const pageItems = res.items || []
+    hasMore.value = searchPageHasMore(pageItems.length)
+    currentPage.value = 1
     if (searchType.value === 'album') {
-      albumItems.value = res.items as SearchAlbumItem[]
+      albumItems.value = pageItems as SearchAlbumItem[]
       items.value = []
       selected.value = null
       selectedAlbum.value = albumItems.value[0] || null
@@ -175,7 +193,7 @@ async function doSearch() {
         toast.info('未找到相关专辑')
       }
     } else {
-      items.value = res.items as Track[]
+      items.value = pageItems as Track[]
       albumItems.value = []
       selectedAlbum.value = null
       selected.value = items.value[0] || null
@@ -186,13 +204,57 @@ async function doSearch() {
       }
     }
   } catch (e: unknown) {
+    if (gen !== searchGen) return
     toast.error(apiErrorMessage(e, '搜索失败'))
     items.value = []
     albumItems.value = []
     selected.value = null
     selectedAlbum.value = null
+    hasMore.value = false
   } finally {
-    loading.value = false
+    if (gen === searchGen) loading.value = false
+  }
+}
+
+async function loadMore() {
+  if (loading.value || loadingMore.value || !hasMore.value) return
+  if (!keyword.value.trim()) return
+  const gen = searchGen
+  const nextPage = currentPage.value + 1
+  loadingMore.value = true
+  try {
+    const res = await $fetch<{
+      type: 'song' | 'album'
+      items: Track[] | SearchAlbumItem[]
+    }>('/api/search', {
+      method: 'POST',
+      body: {
+        platform: platform.value,
+        keyword: keyword.value,
+        page: nextPage,
+        type: searchType.value,
+      },
+    })
+    if (gen !== searchGen) return
+    const pageItems = res.items || []
+    if (searchType.value === 'album') {
+      const existing = new Set(albumItems.value.map((a) => a.id))
+      const unique = (pageItems as SearchAlbumItem[]).filter((a) => !existing.has(a.id))
+      albumItems.value = albumItems.value.concat(unique)
+    } else {
+      const existing = new Set(items.value.map((t) => t.id))
+      const unique = (pageItems as Track[]).filter((t) => !existing.has(t.id))
+      items.value = items.value.concat(unique)
+    }
+    currentPage.value = nextPage
+    // 空页 / 不满一页停止；不因「未撑满视口」自动连环请求
+    hasMore.value = searchPageHasMore(pageItems.length)
+  } catch (e: unknown) {
+    if (gen !== searchGen) return
+    hasMore.value = false
+    toast.error(apiErrorMessage(e, '加载更多失败'))
+  } finally {
+    if (gen === searchGen) loadingMore.value = false
   }
 }
 
@@ -203,6 +265,7 @@ watch(platform, () => {
 watch(searchType, () => {
   ensureAlbumPlatform()
   resetAlbumView()
+  resetSearchPaging()
   items.value = []
   albumItems.value = []
   selected.value = null
@@ -495,26 +558,43 @@ async function retryFailedEnqueue() {
     <div v-else class="split">
       <div class="card list">
         <template v-if="searchType === 'song'">
-          <div
-            v-for="t in items"
-            :key="t.id"
-            class="row"
-            :class="{ active: selected?.id === t.id }"
-            @click="selectTrack(t)"
+          <VirtualList
+            v-if="items.length"
+            :key="`song-${platform}`"
+            :items="items"
+            :estimate-size="64"
+            :has-more="hasMore"
+            :loading="loadingMore || loading"
+            fill
+            @load-more="loadMore"
           >
-            <CoverImage :src="t.cover" class="cover" :alt="t.title" />
-            <div class="meta">
-              <div class="title">{{ t.title }}</div>
-              <div class="muted">{{ t.artist }} · {{ fmtDur(t.duration) }}</div>
-            </div>
-          </div>
-          <p v-if="!items.length" class="muted empty">暂无结果，输入关键词搜索</p>
+            <template #default="{ item }">
+              <div
+                class="row"
+                :class="{ active: selected?.id === item.id }"
+                @click="selectTrack(item)"
+              >
+                <CoverImage :src="item.cover" class="cover" :alt="item.title" />
+                <div class="meta">
+                  <div class="title">{{ item.title }}</div>
+                  <div class="muted">{{ item.artist }} · {{ fmtDur(item.duration) }}</div>
+                </div>
+              </div>
+            </template>
+          </VirtualList>
+          <p v-else class="muted empty">暂无结果，输入关键词搜索</p>
+          <p v-if="loadingMore" class="muted list-footer">加载中…</p>
+          <p v-else-if="items.length && !hasMore" class="muted list-footer">没有更多了</p>
         </template>
         <template v-else>
           <AlbumResultList
+            :key="`album-${platform}`"
             :items="albumItems"
             :selected-id="selectedAlbum?.id"
+            :has-more="hasMore"
+            :loading-more="loadingMore || loading"
             @select="openAlbumDetail"
+            @load-more="loadMore"
           />
         </template>
       </div>
@@ -817,8 +897,16 @@ async function retryFailedEnqueue() {
 .list {
   padding: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   -webkit-overflow-scrolling: touch;
+}
+.list-footer {
+  flex-shrink: 0;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
 }
 .row {
   display: flex;

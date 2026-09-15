@@ -9,41 +9,67 @@ export type SearchAlbumItem = {
   platform: string
 }
 
-const props = defineProps<{
-  items: SearchAlbumItem[]
-  selectedId?: string | null
-}>()
+withDefaults(
+  defineProps<{
+    items: SearchAlbumItem[]
+    selectedId?: string | null
+    hasMore?: boolean
+    loadingMore?: boolean
+  }>(),
+  {
+    selectedId: null,
+    hasMore: false,
+    loadingMore: false,
+  },
+)
 
 const emit = defineEmits<{
   select: [item: SearchAlbumItem]
+  loadMore: []
 }>()
 </script>
 
 <template>
   <div class="album-list">
-    <div
-      v-for="a in items"
-      :key="a.id"
-      class="row"
-      :class="{ active: selectedId === a.id }"
-      @click="emit('select', a)"
+    <VirtualList
+      v-if="items.length"
+      :items="items"
+      :estimate-size="64"
+      :has-more="hasMore"
+      :loading="loadingMore"
+      fill
+      @load-more="emit('loadMore')"
     >
-      <CoverImage :src="a.cover" class="cover" :alt="a.title" />
-      <div class="meta">
-        <div class="title">{{ a.title }}</div>
-        <div class="muted">
-          {{ a.artist }}
-          <span v-if="a.trackCount"> · {{ a.trackCount }} 首</span>
+      <template #default="{ item }">
+        <div
+          class="row"
+          :class="{ active: selectedId === item.id }"
+          @click="emit('select', item)"
+        >
+          <CoverImage :src="item.cover" class="cover" :alt="item.title" />
+          <div class="meta">
+            <div class="title">{{ item.title }}</div>
+            <div class="muted">
+              {{ item.artist }}
+              <span v-if="item.trackCount"> · {{ item.trackCount }} 首</span>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-    <p v-if="!items.length" class="muted empty">暂无专辑结果</p>
+      </template>
+    </VirtualList>
+    <p v-else class="muted empty">暂无专辑结果</p>
+    <p v-if="loadingMore" class="muted list-footer">加载中…</p>
+    <p v-else-if="items.length && !hasMore" class="muted list-footer">没有更多了</p>
   </div>
 </template>
 
 <style scoped>
 .album-list {
-  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .row {
   display: flex;
@@ -71,5 +97,11 @@ const emit = defineEmits<{
 .empty {
   padding: 24px;
   text-align: center;
+}
+.list-footer {
+  flex-shrink: 0;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
 }
 </style>

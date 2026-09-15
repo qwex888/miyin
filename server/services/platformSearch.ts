@@ -1,4 +1,5 @@
 import { PLATFORM_DISPLAY, platformLabel } from '#shared/platforms'
+import { SEARCH_PAGE_SIZE } from '#shared/searchPagination'
 
 export type SearchTrack = {
   id: string
@@ -115,8 +116,8 @@ export function cleanArtist(raw: string) {
 }
 
 async function searchWy(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
-  const offset = (page - 1) * 30
-  const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&limit=30&offset=${offset}`
+  const offset = (page - 1) * SEARCH_PAGE_SIZE
+  const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&limit=${SEARCH_PAGE_SIZE}&offset=${offset}`
   const data = await fetchJson(url, { headers: { Referer: 'https://music.163.com/' }, signal: opts?.signal })
   const songs = data?.result?.songs || []
   return songs.map((s: any) => {
@@ -147,7 +148,7 @@ async function searchWy(keyword: string, page: number, opts?: { signal?: AbortSi
 }
 
 async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
-  const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=music&client=kt&pn=${page - 1}&rn=30&rformat=json&encoding=utf8`
+  const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=music&client=kt&pn=${page - 1}&rn=${SEARCH_PAGE_SIZE}&rformat=json&encoding=utf8`
   const data = await fetchJson(url, { signal: opts?.signal })
   const abs = data?.abslist || []
   return abs.map((s: any) => {
@@ -177,7 +178,7 @@ async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSi
 }
 
 async function searchKg(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
-  const url = `https://complexsearch.kugou.com/v2/search/song?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=30&platform=WebFilter`
+  const url = `https://complexsearch.kugou.com/v2/search/song?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${SEARCH_PAGE_SIZE}&platform=WebFilter`
   const data = await fetchJson(url, { signal: opts?.signal })
   const lists = data?.data?.lists || []
   return lists.map((s: any) => {
@@ -209,7 +210,7 @@ async function searchKg(keyword: string, page: number, opts?: { signal?: AbortSi
 
 async function searchTx(keyword: string, page: number, opts?: { signal?: AbortSignal }): Promise<SearchTrack[]> {
   // tx 公开搜索（轻量；可能偶发失败）
-  const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=30&format=json`
+  const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=${page}&n=${SEARCH_PAGE_SIZE}&format=json`
   const data = await fetchJson(url, { headers: { Referer: 'https://y.qq.com/' }, signal: opts?.signal })
   const list = data?.data?.song?.list || []
   return list.map((s: any) => {

@@ -162,13 +162,27 @@ function enqueueAll() {
     </div>
 
     <div class="track-list">
-      <label v-for="(t, i) in detail.tracks" :key="t.externalId + i" class="track-row">
-        <input type="checkbox" :checked="selected.has(i)" @change="toggleOne(i, ($event.target as HTMLInputElement).checked)" />
-        <span class="track-title">{{ t.title }}</span>
-        <span class="muted track-artist">{{ t.artist }}</span>
-        <span class="muted track-dur">{{ fmtDur(t.duration) }}</span>
-      </label>
-      <p v-if="!detail.tracks.length" class="muted empty-tracks">暂无曲目</p>
+      <VirtualList
+        v-if="detail.tracks.length"
+        :items="detail.tracks"
+        :estimate-size="52"
+        :dynamic="true"
+        fill
+      >
+        <template #default="{ item: t, index: i }">
+          <label class="track-row">
+            <input
+              type="checkbox"
+              :checked="selected.has(i)"
+              @change="toggleOne(i, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track-title">{{ t.title }}</span>
+            <span class="muted track-artist">{{ t.artist }}</span>
+            <span class="muted track-dur">{{ fmtDur(t.duration) }}</span>
+          </label>
+        </template>
+      </VirtualList>
+      <p v-else class="muted empty-tracks">暂无曲目</p>
     </div>
   </div>
 </template>
@@ -242,7 +256,11 @@ function enqueueAll() {
 }
 .track-list {
   flex: 1 1 auto;
-  overflow: auto;
+  /* 弹性占满剩余高度，同时兜底最小高度，避免小屏被上方控件挤没 */
+  min-height: 400px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
@@ -262,9 +280,7 @@ function enqueueAll() {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   cursor: pointer;
-}
-.track-row:last-child {
-  border-bottom: 0;
+  box-sizing: border-box;
 }
 .track-title {
   min-width: 0;
@@ -293,10 +309,10 @@ function enqueueAll() {
     width: 100%;
   }
   .track-list {
-    /* 避免被上方选项挤没：至少 400px，内部可滚 */
+    /* H5：父级常为 height:auto，给列表明确高度供 VirtualList fill；仍保底 400px */
     flex: none;
+    height: max(400px, min(55vh, 520px));
     min-height: 400px;
-    max-height: min(55vh, 520px);
   }
   .track-row {
     grid-template-columns: auto 1fr;
