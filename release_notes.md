@@ -1,61 +1,55 @@
-## [0.5.0] - 2026-09-02
+## [0.5.1] - 2026-09-15
 
 ### Added
 
-- 歌单解析支持酷我（kw）链接（含 `m.kuwo.cn/newh5app/playlist_detail/{id}`），分页拉全曲目
-- 专辑搜索/详情：补充 mock fetch 的 service 与路由等价路径测试（含 kg/kw 分页与硬顶）
-- 设置页分为「基础设置 / 访问口令」两个 Tab；访问口令修改（须校验当前口令，可留空切回开放模式）立即生效，无需重启。优先级：应用内设置 > Docker `-e` / 飞牛安装向导；FPK 同步写入 `miyin.env`
-- 搜索页支持「单曲 / 专辑」切换：可按专辑名搜索（wy / tx / kw / kg），进入专辑详情后多选或一键整专入队下载
-- 单曲详情增加「查看专辑」跳转（携带 albumId 时直达整专曲目列表）
-- 专辑/歌单批量入队结果弹窗：失败项按原因分组汇总，支持重试失败项；查看队列时可按 batchId 筛选同批任务
-- CHANGELOG 与 Release 分工：`[Unreleased]` 仅用户可感知摘要；发版 Release Notes 自动附 git tag 区间 commit 溯源；新增 `pnpm changelog:add` 辅助写入
-- CI：PR 策略检查（禁止二进制/超大文件、业务变更须更新 CHANGELOG）；PR 模板与按路径自动打 label
-- 贡献指南：PR 流程、fork 首次需 Approve workflows、分支保护配置说明（合并仍须维护者人工确认）
-- 单元测试：新增 `tests/platformSearchVar.test.ts`，覆盖 `wy`、`kw`、`kg`、`tx` 全部 4 个音乐平台的搜索适配器变量声明与返回结构完备性测试
-- 队列与健康检查：暴露 `/api/health` 实时内存指标（`rssMb`、`heapUsedMb`、`heapTotalMb`）与 `/api/downloads/stats` 队列聚合统计接口
-- 队列失败 Tab：选中任务后可「批量换音质」「批量换源」（全选也可用）；H5 工具栏双列自适应
-- 音源批量导入/检测/目录与完整包导入：进度弹窗支持「立即停止」；服务端按项边界中止，已完成项保留
+- 试听栏展开/收起按钮在播放中会显示轻微边框波纹动效，便于识别当前正在试听 (@qwex888)
 
-### Changed
+- 试听栏全局显示（切换页面保持播放），支持收起/展开、底部留白防遮挡，以及可拖动进度条；展开/收起为仅箭头样式 (@qwex888)
 
-- 更新说明弹窗不再附带下载链接
-- 登录页与设置页口令输入统一使用显/隐眼睛图标组件
-- 登录页访问口令输入框支持显/隐切换（右侧眼睛图标）
-- 歌单解析与匹配流程：歌单解析提取曲目基础元信息并保留原始 `musicInfo`，入队与下载支持快速直通通道（`allowManualBypass`）或匹配引擎跨平台解析，避免大歌单发起不必要的强制全量二次搜索
-- Benchmark 测试门禁：为高耗时及依赖外部网络的内存/吞吐量基准测试（`tests/realPlaylistMemory.test.ts`、`tests/cleanPlaylistBench.test.ts`、`tests/benchmarkMemory.test.ts`）添加 `describe.skipIf(!process.env.RUN_BENCHMARKS)`，确保默认 CI 与本地单元测试确定性且毫秒级快速通过
-- 下载并发与队列调度：采用 `p-queue` 接管任务并发与动态调度，绑定 `AbortController` 信号传递替代旧定时器循环与全局 cancel 集合，流式下载进度广播增加节流控制（250ms / 5% 变化量）
+- 专辑下载可勾选「按文件夹归档」并配置文件夹命名（默认 `{album}`，写入服务端设置）；歌单不自动建夹（@larryzbo）
+
+- 搜索页单曲/专辑支持触底自动加载更多（各平台统一每页 30 条）；空页、不满一页或请求失败时停止，避免无限重试 (@Andyong8901)
+
+- 本地可自动下载官方 fnpack（`pnpm download:fnpack` / `pnpm build:fpk`），并同步带版本号的 `.fpk` 到 `dist/`（@timor-m, PR #24）
 
 ### Fixed
 
-- 酷狗超长歌单曲目偏少：改用 pubsongs `get_other_list_file`（安卓签名）拉全量，避免旧 `special/song` 将 total 截断（如 988→735）
-- 酷狗 gcid 分享歌单（如 `m.kugou.com/songlist/gcid_…`）识别失败：改为经 m 站解析 `specialid` 后再拉曲目，避免跟到 www 空壳页
-- 酷狗（kg）专辑详情超过单页 500 首时改为分页拉全曲目（硬顶 50 页），避免整专入队被截断；酷我（kw）专辑详情同步分页；网易/QQ 经核查为单次全量接口、请求侧无 pagesize 截断
-- 队列页：下载进度 SSE 不再每次触发 `/api/downloads/stats`；仅在任务状态变化时防抖刷新，避免单任务下载时每秒请求数次
-- 单元测试：`playlistMatchStream` 入队相关用例改用临时 `DATA_DIR`，避免 `pnpm test` 向开发库 `./data` 写入 `Track N` 假任务污染下载队列
-- 服务启动自愈：服务启动时自愈扫描并将残留的孤儿 `status = 'running'` 任务重置为 `queued`，解决应用重启后残留假运行与并发显示不准
-- 取消竞态修复：修复下载任务取消与执行调度之间的竞态条件（P1-1），严密校验 DB 状态与 AbortController，防止已取消任务在 processTask 启动或执行中被错误复活为 `running`
-- 任务调度分发：优化 p-queue 任务分发机制，入队前保持 queued 状态并增加 tickWorker 互斥锁（P1-2），避免并发数设置较小时 UI 提前显示多条 running
-- 跨平台搜索适配器：修复 `server/services/platformSearch.ts` 中 `kw` (id)、`kg` (hash)、`tx` (mid) 的局部变量声明，防止由于变量未定义导致运行时抛出 `ReferenceError`
-- 音源沙箱异常治理：重构 `sourceRuntime.ts` 中的异步拒绝守卫（`rejectionGuard`），使用引用计数与局部桶（Bucket）监听器及时解绑与清理引用，消除未捕获 Promise 拒绝导致的 V8 GC Root 内存泄漏
-- 仓库治理：彻底移除仓库内提交的平台可执行二进制文件 `packaging/fnos/bin/fnpack.exe`
+- 尝试修复 iOS 15 访问页面空白：将 Vite 构建目标设为 `safari15`，以关闭 Nuxt `#entry` importmap（需真机验证）(@qwex888)
+
+- 为 iOS 15.0–15.3 补齐 `Object.hasOwn` / `findLast*` polyfill，避免 Nuxt payload 解析阶段白屏（@timor-m, PR #24）
+
+- 试听取链中展示「取链中…」，切换曲目或关闭时取消上一请求并停止缓冲 (@qwex888)
+
+- 网易/QQ/酷狗歌单解析补全 musicInfo，支持同平台 id 直通入队，避免二次搜索失败导致队列为空；批量入队无可用音源时不再假成功 (@qwex888)
 
 ### Changed
 
-- 全局 viewport 禁止双指缩放（`user-scalable=no`）
+- 专辑详情曲目列表改为虚拟滚动（弹性高度 + 最小 400px 兜底），超大合集滚动更顺畅
+
+- 音源更新提示整条可点（可一键更新则更新，否则打开说明），并将一键更新/打开说明提到提示旁始终显示；操作列仍保留 (@qwex888)
+
+- 接入 @vueuse/nuxt，底部导航用 useScreenSafeArea 适配多机型安全区 (@qwex888)
 
 
 ---
 
 ## 技术溯源
 
-完整对比：[v0.4.3...v0.5.0](https://github.com/qwex888/miyin/compare/v0.4.3...v0.5.0)
+完整对比：[v0.5.0...v0.5.1](https://github.com/qwex888/miyin/compare/v0.5.0...v0.5.1)
 
 ### Commits
 
-- [`97681f7`](https://github.com/qwex888/miyin/commit/97681f7468983feb95e0cb61ac914e49c0a4ed4f) feat(playlist): 增强酷狗与酷我歌单解析支持 _(qwex888)_
-- [`c7b3812`](https://github.com/qwex888/miyin/commit/c7b3812070d3afb8ba83b692b1554b16b2729024) feat(update): 根据部署环境显示不同的更新指引 _(huangdongliang)_
-- [`e21c15e`](https://github.com/qwex888/miyin/commit/e21c15eff3c15280f6f260dd9b3bdc67a4c336c5) feat(auth): 支持应用内动态修改访问口令并立即生效 _(huangdongliang)_
-- [`71f3c21`](https://github.com/qwex888/miyin/commit/71f3c21db3187ec74e8cb9532d0abbfa0e44d59c) feat(音源/队列): 增加批量操作支持与进度可停止功能 _(huangdongliang)_
-- [`f6fb2de`](https://github.com/qwex888/miyin/commit/f6fb2dedadd0c32b632d2ebc201d615394eddfd7) feat(search): 支持专辑搜索与批量下载功能 _(huangdongliang)_
-- [`4bd01d3`](https://github.com/qwex888/miyin/commit/4bd01d3f5e02f8878b143e4796284bd48edd3504) docs: 规范 CHANGELOG 书写并新增辅助脚本 _(huangdongliang)_
-- [`b6a1f06`](https://github.com/qwex888/miyin/commit/b6a1f069ee5ec409bbdb85098b21b90e0715a1b2) Merge pull request #10 from wht300/feat/playlist-match-concurrency-stream-cancel _(yocat)_
+- [`884edab`](https://github.com/qwex888/miyin/commit/884edab6408827a5ae169a1a60f9136a0c7164bc) feat(release): 优化发版脚本，自动同步精简更新说明到飞牛 manifest _(qwex888)_
+- [`fbd0885`](https://github.com/qwex888/miyin/commit/fbd0885f6d5b3f6bfbbc014f7bfae2c39d5db9b5) feat(player): enhance mini player functionality and UI _(qwex888)_
+- [`427efe1`](https://github.com/qwex888/miyin/commit/427efe1845fd9611b8c57606ae0f29dffcf449ba) fix(fnpack): 对齐 CLI 版本并兼容 Windows 路径 _(qwex888)_
+- [`38fb772`](https://github.com/qwex888/miyin/commit/38fb7729513c555bdf17beec0851a69a393b776e) feat(album): 添加专辑下载按文件夹归档功能 _(qwex888)_
+- [`95f0bcf`](https://github.com/qwex888/miyin/commit/95f0bcf0005ee6973bfa0d914092431db39ac77a) feat(fnpack): 自动下载 fnpack CLI 并更新构建脚本 _(timor-m)_
+- [`03f4095`](https://github.com/qwex888/miyin/commit/03f4095735327ef4b38716b701fdd29d4801298c) feat(search): 增强搜索功能与专辑详情展示 _(qwex888)_
+- [`cba633d`](https://github.com/qwex888/miyin/commit/cba633ddc2026f5ef430f8917c20203372d63c69) fix(ios15): 设置 Vite 构建目标为 safari15 尝试修复 iOS 15 页面空白 _(qwex888)_
+- [`3f9b727`](https://github.com/qwex888/miyin/commit/3f9b7279db0ef3c06af2380b5019b773457f114c) feat(update): 增加音源更新提示与一键更新功能 _(qwex888)_
+- [`1dde218`](https://github.com/qwex888/miyin/commit/1dde2184dce5c4025c9fcd0b7f75f79d3369dbe1) feat: 支持歌单ID直通入队，修复试听与移动端安全区适配 _(qwex888)_
+
+### 合并提交
+
+- [`94a0bf3`](https://github.com/qwex888/miyin/commit/94a0bf34f41ec047ceab21029127193e263270c5) Merge pull request #24 from timor-m/main _(yocat)_
+- [`8c3a5a0`](https://github.com/qwex888/miyin/commit/8c3a5a03e1e9e852375ceae24b8f83806e5d89e0) Merge branch 'main' into main _(yocat)_

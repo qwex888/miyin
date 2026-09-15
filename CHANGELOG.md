@@ -11,6 +11,9 @@
 - 追加条目：`pnpm changelog:add <类型> "描述" [--author 用户名] [--pr 编号]`
 
 ## [Unreleased]
+
+## [0.5.1] - 2026-09-15
+
 ### Added
 
 - 试听栏展开/收起按钮在播放中会显示轻微边框波纹动效，便于识别当前正在试听 (@qwex888)
@@ -221,7 +224,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/qwex888/miyin/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qwex888/miyin/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/qwex888/miyin/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/qwex888/miyin/compare/v0.4.1...v0.4.2
