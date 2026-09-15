@@ -37,6 +37,7 @@ packaging/fnos/miyin/app/server/
 
 # fnpack 官方 CLI（pnpm download:fnpack 下载到本目录）
 tools/fnpack
+tools/fnpack.exe
 tools/fnpack-*
 tools/fnpack.version
 

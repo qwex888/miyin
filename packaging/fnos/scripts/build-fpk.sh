@@ -163,18 +163,28 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 echo "==> fnpack build"
-# fnpack 查找顺序：FNPACK_BIN > PATH > tools/fnpack（参考 fnos-app-shutdown 流程）
+# fnpack 查找顺序：FNPACK_BIN > PATH > tools/fnpack(.exe)（参考 fnos-app-shutdown 流程）
+resolve_tools_fnpack() {
+  if [ -x "$ROOT/tools/fnpack" ]; then
+    echo "$ROOT/tools/fnpack"
+  elif [ -x "$ROOT/tools/fnpack.exe" ]; then
+    echo "$ROOT/tools/fnpack.exe"
+  fi
+}
+
 FNPACK_RESOLVED=""
 if [ -n "${FNPACK_BIN:-}" ] && [ -x "${FNPACK_BIN}" ]; then
   FNPACK_RESOLVED="${FNPACK_BIN}"
 elif command -v fnpack >/dev/null 2>&1; then
   FNPACK_RESOLVED="$(command -v fnpack)"
-elif [ -x "$ROOT/tools/fnpack" ]; then
-  FNPACK_RESOLVED="$ROOT/tools/fnpack"
 else
+  FNPACK_RESOLVED="$(resolve_tools_fnpack)"
+fi
+
+if [ -z "$FNPACK_RESOLVED" ]; then
   echo "==> fnpack 未安装，尝试自动下载到 tools/fnpack"
-  if node "$ROOT/scripts/download-fnpack.mjs" && [ -x "$ROOT/tools/fnpack" ]; then
-    FNPACK_RESOLVED="$ROOT/tools/fnpack"
+  if node "$ROOT/scripts/download-fnpack.mjs"; then
+    FNPACK_RESOLVED="$(resolve_tools_fnpack)"
   fi
 fi
 

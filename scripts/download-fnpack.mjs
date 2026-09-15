@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 下载官方 fnpack 到 tools/fnpack（供 pnpm build:fpk 使用）
 // 用法：node scripts/download-fnpack.mjs
-// 环境变量：FNPACK_VERSION（默认 1.2.3）、FNPACK_FORCE=1 强制重下
+// 环境变量：FNPACK_VERSION（默认 1.2.3，与 .github/workflows/release.yml 对齐）、FNPACK_FORCE=1 强制重下
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

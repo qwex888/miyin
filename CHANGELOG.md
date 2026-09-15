@@ -17,9 +17,13 @@
 
 - 搜索页单曲/专辑支持触底自动加载更多（各平台统一每页 30 条）；空页、不满一页或请求失败时停止，避免无限重试 (@Andyong8901)
 
+- 本地可自动下载官方 fnpack（`pnpm download:fnpack` / `pnpm build:fpk`），并同步带版本号的 `.fpk` 到 `dist/`（@timor-m, PR #24）
+
 ### Fixed
 
 - 尝试修复 iOS 15 访问页面空白：将 Vite 构建目标设为 `safari15`，以关闭 Nuxt `#entry` importmap（需真机验证）(@qwex888)
+
+- 为 iOS 15.0–15.3 补齐 `Object.hasOwn` / `findLast*` polyfill，避免 Nuxt payload 解析阶段白屏（@timor-m, PR #24）
 
 - 试听取链中展示「取链中…」，切换曲目或关闭时取消上一请求并停止缓冲 (@qwex888)
 

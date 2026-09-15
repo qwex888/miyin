@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 env:
-  FNPACK_VERSION: '1.2.1'
+  FNPACK_VERSION: '1.2.3'
   DOCKERHUB_IMAGE: qwex333/miyin
   GHCR_IMAGE: ghcr.io/qwex888/miyin
 
