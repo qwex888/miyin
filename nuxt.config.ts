@@ -10,6 +10,12 @@ export default defineNuxtConfig({
   modules: ['@vueuse/nuxt'],
   devtools: { enabled: true },
   css: ['~/assets/css/main.css'],
+  // 尝试兼容 iOS 15：声明 safari15 后 Nuxt 会关闭 #entry importmap（该特性需 Safari 16.4+）
+  vite: {
+    build: {
+      target: 'safari15',
+    },
+  },
   app: {
     // 飞牛统一网关下为 /app/miyin/；本地默认 /
     baseURL: normalizedBase,
