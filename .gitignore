@@ -35,5 +35,10 @@ logs
 packaging/fnos/miyin/app/server/
 *.fpk
 
+# fnpack 官方 CLI（pnpm download:fnpack 下载到本目录）
+tools/fnpack
+tools/fnpack-*
+tools/fnpack.version
+
 # 发版产物（CI 生成并上传 Release，不入库）
 latest.json

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# 构建觅音 Native .fpk（需本机或 CI 安装 fnpack）
+# 构建觅音 Native .fpk（fnpack 缺失时自动下载到 tools/fnpack，可用 FNPACK_BIN 指定）
 # - 统一网关 /app/miyin
 # - D2 胖包：better-sqlite3 自带 prebuilds（linux-x64 / linux-arm64）
 # 环境变量：
 #   MIYIN_VERSION   覆盖 manifest.version（如 0.2.0）
-#   REQUIRE_FNPACK  设为 1 时缺少 fnpack 则失败（CI 用）
-#   FPK_OUT         输出 .fpk 路径（默认 packaging/fnos/miyin/miyin.fpk 旁）
+#   REQUIRE_FNPACK  设为 1 时缺少 fnpack 且自动下载失败则报错（CI 用）
+#   FNPACK_BIN      指定 fnpack 二进制路径（默认依次找 PATH、tools/fnpack）
+#   FNPACK_VERSION  自动下载的 fnpack 版本（默认 1.2.3，见 scripts/download-fnpack.mjs）
+#   FPK_OUT         额外输出 .fpk 路径（dist/miyin-v<version>.fpk 总会生成）
 # 参考：https://developer.fnnas.com/docs/examples/native/
 set -euo pipefail
 
@@ -161,19 +163,34 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 echo "==> fnpack build"
-if ! command -v fnpack >/dev/null 2>&1; then
+# fnpack 查找顺序：FNPACK_BIN > PATH > tools/fnpack（参考 fnos-app-shutdown 流程）
+FNPACK_RESOLVED=""
+if [ -n "${FNPACK_BIN:-}" ] && [ -x "${FNPACK_BIN}" ]; then
+  FNPACK_RESOLVED="${FNPACK_BIN}"
+elif command -v fnpack >/dev/null 2>&1; then
+  FNPACK_RESOLVED="$(command -v fnpack)"
+elif [ -x "$ROOT/tools/fnpack" ]; then
+  FNPACK_RESOLVED="$ROOT/tools/fnpack"
+else
+  echo "==> fnpack 未安装，尝试自动下载到 tools/fnpack"
+  if node "$ROOT/scripts/download-fnpack.mjs" && [ -x "$ROOT/tools/fnpack" ]; then
+    FNPACK_RESOLVED="$ROOT/tools/fnpack"
+  fi
+fi
+
+if [ -z "$FNPACK_RESOLVED" ]; then
   if [ "$REQUIRE_FNPACK" = "1" ]; then
-    echo "ERROR: 未安装 fnpack（REQUIRE_FNPACK=1）"
+    echo "ERROR: 未安装 fnpack 且自动下载失败（REQUIRE_FNPACK=1）"
     exit 1
   fi
   echo "WARN: fnpack 未安装。应用文件已就绪：$PACK_DIR"
-  echo "请在飞牛开发环境执行：cd packaging/fnos/miyin && fnpack build"
+  echo "可执行 pnpm download:fnpack 后重试，或在飞牛开发环境执行：cd packaging/fnos/miyin && fnpack build"
   exit 0
 fi
 
 (
   cd "$PACK_DIR"
-  fnpack build
+  "$FNPACK_RESOLVED" build
 )
 
 FPK_SRC="$(find "$PACK_DIR" "$ROOT" -maxdepth 2 -name 'miyin.fpk' -type f 2>/dev/null | head -n 1 || true)"
@@ -186,6 +203,14 @@ if [ -n "${FPK_OUT:-}" ]; then
   mkdir -p "$(dirname "$FPK_OUT")"
   cp -f "$FPK_SRC" "$FPK_OUT"
   echo "==> copied to $FPK_OUT"
+fi
+
+# 同步一份带版本号的产物到 dist/（参考 fnos-app-shutdown 流程，便于上传到开发设备）
+MANIFEST_VERSION="$(sed -n 's/^version=//p' "$PACK_DIR/manifest" | head -n 1)"
+if [ -n "$MANIFEST_VERSION" ]; then
+  mkdir -p "$ROOT/dist"
+  cp -f "$FPK_SRC" "$ROOT/dist/miyin-v${MANIFEST_VERSION}.fpk"
+  echo "==> dist: $ROOT/dist/miyin-v${MANIFEST_VERSION}.fpk"
 fi
 
 echo "==> done: $FPK_SRC"

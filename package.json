@@ -11,6 +11,7 @@
     "postinstall": "nuxt prepare",
     "test": "vitest run",
     "changelog:add": "bash scripts/changelog-entry.sh",
+    "download:fnpack": "node scripts/download-fnpack.mjs",
     "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh",
     "release": "bash scripts/release.sh"
   },
