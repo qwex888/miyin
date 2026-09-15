@@ -34,6 +34,8 @@ const props = withDefaults(
     quality: DownloadQuality
     withLyric: boolean
     lyricMode: 'external' | 'embedded'
+    albumDownloadToFolder: boolean
+    albumFolderTemplate: string
     /** 全屏详情（H5）显示返回；PC 侧栏内嵌时可关闭 */
     showBack?: boolean
   }>(),
@@ -49,9 +51,23 @@ const emit = defineEmits<{
   'update:quality': [v: DownloadQuality]
   'update:withLyric': [v: boolean]
   'update:lyricMode': [v: 'external' | 'embedded']
+  'update:albumDownloadToFolder': [v: boolean]
+  'update:albumFolderTemplate': [v: string]
 }>()
 
 const selected = ref<Set<number>>(new Set())
+
+const folderPreview = computed(() => {
+  if (!props.albumDownloadToFolder) return ''
+  const album = props.detail.album
+  return props.albumFolderTemplate
+    .replaceAll('{album}', album.title || '')
+    .replaceAll('{artist}', album.artist || '')
+    .replaceAll('{platform}', album.platform || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+})
 
 const allSelected = computed(() => {
   const n = props.detail.tracks.length
@@ -144,6 +160,27 @@ function enqueueAll() {
           <option value="embedded">仅内嵌到音频</option>
         </select>
       </label>
+      <label class="check">
+        <input
+          :checked="albumDownloadToFolder"
+          type="checkbox"
+          @change="emit('update:albumDownloadToFolder', ($event.target as HTMLInputElement).checked)"
+        />
+        按文件夹下载
+      </label>
+      <label v-if="albumDownloadToFolder" class="field-inline folder-field">
+        <span>文件夹命名</span>
+        <input
+          :value="albumFolderTemplate"
+          class="input"
+          placeholder="{album}"
+          @input="emit('update:albumFolderTemplate', ($event.target as HTMLInputElement).value)"
+        />
+      </label>
+      <p v-if="albumDownloadToFolder" class="folder-hint muted">
+        预览：{{ folderPreview || '（空，将平铺）' }}{{ folderPreview ? '/' : '' }}
+        · 文件名仍用设置里的命名模板 · 可用 {album} {artist} {platform}
+      </p>
     </div>
 
     <div class="toolbar">
@@ -194,6 +231,7 @@ function enqueueAll() {
   min-height: 0;
   height: 100%;
   padding: 12px;
+  overflow-y: auto;
 }
 .head {
   flex-shrink: 0;
@@ -234,6 +272,23 @@ function enqueueAll() {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+}
+.field-inline span {
+  flex-shrink: 0;
+}
+.folder-field {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+.folder-field .input {
+  flex: 1;
+  min-width: 0;
+}
+.folder-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 .check {
   display: flex;

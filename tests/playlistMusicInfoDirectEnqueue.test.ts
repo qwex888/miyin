@@ -205,5 +205,35 @@ describe('playlist musicInfo + externalId direct enqueue', () => {
     expect(JSON.parse(byPlatform.wy!.music_info_json).songmid).toBe('111')
     expect(JSON.parse(byPlatform.tx!.music_info_json).source).toBe('tx')
     expect(JSON.parse(byPlatform.kg!.music_info_json).hash).toBe('ABCDEF0123456789')
+    expect(JSON.parse(byPlatform.wy!.music_info_json).__folderPrefix).toBeUndefined()
+  })
+
+  it('attaches resolved __folderPrefix when albumDownloadToFolder is enabled', async () => {
+    const res = await matchAndEnqueuePlaylist(
+      {
+        platform: 'wy',
+        title: '叶惠美',
+        url: 'album://wy/123',
+        tracks: [
+          {
+            platform: 'wy',
+            externalId: '186016',
+            title: '晴天',
+            artist: '周杰伦',
+            album: '叶惠美',
+          },
+        ],
+      },
+      {
+        albumDownloadToFolder: true,
+        albumFolderTemplate: '{artist}/{album}',
+        albumArtist: '周杰伦',
+      },
+    )
+    expect(res.enqueued).toBe(1)
+    const row = getDb()
+      .prepare(`SELECT music_info_json FROM download_tasks LIMIT 1`)
+      .get() as { music_info_json: string }
+    expect(JSON.parse(row.music_info_json).__folderPrefix).toBe('周杰伦/叶惠美')
   })
 })

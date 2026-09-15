@@ -6,7 +6,7 @@ import { request as httpRequestPlain } from 'node:http'
 import { URL } from 'node:url'
 import { searchPlatform } from './platformSearch'
 import { matchTrack } from './trackMatcher'
-import { enqueueDownload, batchEnqueueDownload } from './downloadQueue'
+import { enqueueDownload, batchEnqueueDownload, applyFolderTemplate } from './downloadQueue'
 import { getSettings } from './settingsService'
 import { assertDownloadDirWritable } from '../utils/downloadDir'
 
@@ -1343,6 +1343,11 @@ export type MatchAndEnqueueOptions = {
   lyricMode?: 'external' | 'embedded'
   onlyMatched?: boolean
   concurrency?: number
+  /** When true, resolve album folder prefix once and attach to each task */
+  albumDownloadToFolder?: boolean
+  albumFolderTemplate?: string
+  /** Album-level artist for folder template `{artist}` */
+  albumArtist?: string
   signal?: AbortSignal
   onProgress?: (event: {
     stage: 'parsing' | 'matching' | 'enqueuing'
@@ -1359,7 +1364,8 @@ export async function matchAndEnqueuePlaylist(
   opts?: MatchAndEnqueueOptions,
 ) {
   // 入队前先探测下载目录可写，避免整批「成功 0」且无明确错误
-  assertDownloadDirWritable(getSettings().downloadDir)
+  const settings = getSettings()
+  assertDownloadDirWritable(settings.downloadDir)
 
   const signal = opts?.signal
   if (signal?.aborted) {
@@ -1367,6 +1373,15 @@ export async function matchAndEnqueuePlaylist(
     err.name = 'AbortError'
     throw err
   }
+
+  const useAlbumFolder = opts?.albumDownloadToFolder === true
+  const folderPrefix = useAlbumFolder
+    ? applyFolderTemplate(opts?.albumFolderTemplate || settings.albumFolderTemplate, {
+        album: draft.title,
+        artist: opts?.albumArtist || draft.tracks[0]?.artist || '',
+        platform: draft.platform,
+      }) || undefined
+    : undefined
 
   const batchId = randomUUID()
   const total = draft.tracks.length
@@ -1382,6 +1397,7 @@ export async function matchAndEnqueuePlaylist(
     matchMethod?: string
     downloadLyric?: boolean
     lyricMode?: 'external' | 'embedded'
+    folderPrefix?: string
     batchId?: string
     playlistUrl?: string
     resultIndex: number
@@ -1427,6 +1443,7 @@ export async function matchAndEnqueuePlaylist(
           matchMethod: track.matchMethod || (track.musicInfo ? 'manual' : 'id'),
           downloadLyric: opts?.downloadLyric,
           lyricMode: opts?.lyricMode,
+          folderPrefix,
           batchId,
           playlistUrl: draft.url,
           resultIndex: index,
@@ -1507,6 +1524,7 @@ export async function matchAndEnqueuePlaylist(
         matchMethod: matched.method,
         downloadLyric: opts?.downloadLyric,
         lyricMode: opts?.lyricMode,
+        folderPrefix,
         batchId,
         playlistUrl: draft.url,
         resultIndex: index,

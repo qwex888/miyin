@@ -8,9 +8,12 @@ type Settings = {
   downloadLyric: boolean
   lyricMode: 'external' | 'embedded'
   nameTemplate: string
+  albumDownloadToFolder: boolean
+  albumFolderTemplate: string
   autoFailover: boolean
   maxAttempts: number
   nameTemplateVars?: Array<{ key: string; desc: string }>
+  albumFolderTemplateVars?: Array<{ key: string; desc: string }>
   ffmpegAvailable?: boolean
 }
 
@@ -23,10 +26,13 @@ const form = reactive<Settings>({
   downloadLyric: true,
   lyricMode: 'external',
   nameTemplate: '{artist} - {title}',
+  albumDownloadToFolder: true,
+  albumFolderTemplate: '{album}',
   autoFailover: true,
   maxAttempts: 3,
 })
 const templateVars = ref<Array<{ key: string; desc: string }>>([])
+const albumFolderVars = ref<Array<{ key: string; desc: string }>>([])
 const ffmpegAvailable = ref<boolean | null>(null)
 const formError = ref('')
 const loading = ref(false)
@@ -85,6 +91,13 @@ const templatePreview = computed(() => {
     .replaceAll('{track}', '3')
 })
 
+const albumFolderPreview = computed(() => {
+  return form.albumFolderTemplate
+    .replaceAll('{album}', '叶惠美')
+    .replaceAll('{artist}', '周杰伦')
+    .replaceAll('{platform}', 'wy')
+})
+
 async function onCheckUpdate() {
   loadingText.value = '检查更新中…'
   loading.value = true
@@ -116,10 +129,13 @@ async function load() {
       downloadLyric: res.downloadLyric,
       lyricMode: res.lyricMode || 'external',
       nameTemplate: res.nameTemplate,
+      albumDownloadToFolder: res.albumDownloadToFolder ?? true,
+      albumFolderTemplate: res.albumFolderTemplate || '{album}',
       autoFailover: res.autoFailover,
       maxAttempts: res.maxAttempts,
     })
     templateVars.value = res.nameTemplateVars || []
+    albumFolderVars.value = res.albumFolderTemplateVars || []
     ffmpegAvailable.value = res.ffmpegAvailable ?? null
     await loadAuthStatus()
     await refreshFnOsAuth({ notifyError: true })
@@ -244,6 +260,8 @@ async function save() {
         downloadLyric: form.downloadLyric,
         lyricMode: form.lyricMode,
         nameTemplate: form.nameTemplate,
+        albumDownloadToFolder: form.albumDownloadToFolder,
+        albumFolderTemplate: form.albumFolderTemplate.trim() || '{album}',
         autoFailover: form.autoFailover,
         maxAttempts: form.maxAttempts,
       },
@@ -410,6 +428,21 @@ useRegisterPageRefresh(async () => {
         <p class="hint">预览：{{ templatePreview }}</p>
         <ul class="var-list">
           <li v-for="v in templateVars" :key="v.key">
+            <code>{{ v.key }}</code> — {{ v.desc }}
+          </li>
+        </ul>
+      </label>
+
+      <label class="check">
+        <input v-model="form.albumDownloadToFolder" type="checkbox" />
+        专辑下载默认按文件夹归档
+      </label>
+      <label v-if="form.albumDownloadToFolder">
+        <span>专辑文件夹命名模板</span>
+        <input v-model="form.albumFolderTemplate" class="input" />
+        <p class="hint">预览：{{ albumFolderPreview || '（空）' }}/ · 仅作用于专辑入队，文件名仍用上方命名模板</p>
+        <ul class="var-list">
+          <li v-for="v in albumFolderVars" :key="v.key">
             <code>{{ v.key }}</code> — {{ v.desc }}
           </li>
         </ul>

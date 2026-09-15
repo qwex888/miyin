@@ -16,6 +16,9 @@ export default defineEventHandler(async (event) => {
     quality?: string
     downloadLyric?: boolean
     lyricMode?: 'external' | 'embedded'
+    albumDownloadToFolder?: boolean
+    albumFolderTemplate?: string
+    albumArtist?: string
     stream?: boolean | string
     concurrency?: number
   }>(event)
@@ -25,6 +28,9 @@ export default defineEventHandler(async (event) => {
     downloadLyric: body?.downloadLyric,
     lyricMode: body?.lyricMode,
     concurrency: body?.concurrency,
+    albumDownloadToFolder: body?.albumDownloadToFolder,
+    albumFolderTemplate: body?.albumFolderTemplate,
+    albumArtist: body?.albumArtist,
   }
 
   const wantsStream = wantsSourceBatchStream(event, body?.stream)

@@ -53,6 +53,9 @@ let searchGen = 0
 const quality = ref<DownloadQuality>('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
+const albumDownloadToFolder = ref(true)
+const albumFolderTemplate = ref('{album}')
+let albumFolderSaveTimer: ReturnType<typeof setTimeout> | null = null
 const { play, current, playing, toggle, stop } = usePlayer()
 const toast = useToast()
 const detailSheetOpen = ref(false)
@@ -107,15 +110,50 @@ async function loadLyricDefaults() {
       downloadLyric: boolean
       lyricMode: 'external' | 'embedded'
       defaultQuality: string
+      albumDownloadToFolder?: boolean
+      albumFolderTemplate?: string
     }>('/api/settings')
     withLyric.value = s.downloadLyric
     lyricMode.value = s.lyricMode || 'external'
     if (DOWNLOAD_QUALITY_OPTIONS.some((o) => o.id === s.defaultQuality)) {
       quality.value = s.defaultQuality as DownloadQuality
     }
+    if (typeof s.albumDownloadToFolder === 'boolean') {
+      albumDownloadToFolder.value = s.albumDownloadToFolder
+    }
+    if (typeof s.albumFolderTemplate === 'string' && s.albumFolderTemplate.trim()) {
+      albumFolderTemplate.value = s.albumFolderTemplate
+    }
   } catch {
     /* ignore */
   }
+}
+
+function persistAlbumFolderSettings() {
+  if (albumFolderSaveTimer) clearTimeout(albumFolderSaveTimer)
+  albumFolderSaveTimer = setTimeout(async () => {
+    try {
+      await $fetch('/api/settings', {
+        method: 'PUT',
+        body: {
+          albumDownloadToFolder: albumDownloadToFolder.value,
+          albumFolderTemplate: albumFolderTemplate.value.trim() || '{album}',
+        },
+      })
+    } catch {
+      /* ignore — 入队仍会带上当前值 */
+    }
+  }, 400)
+}
+
+function onAlbumDownloadToFolder(v: boolean) {
+  albumDownloadToFolder.value = v
+  persistAlbumFolderSettings()
+}
+
+function onAlbumFolderTemplate(v: string) {
+  albumFolderTemplate.value = v
+  persistAlbumFolderSettings()
 }
 
 onMounted(() => {
@@ -435,6 +473,9 @@ async function enqueueAlbumTracks(indices: number[]) {
         downloadLyric: withLyric.value,
         lyricMode: lyricMode.value,
         quality: quality.value,
+        albumDownloadToFolder: albumDownloadToFolder.value,
+        albumFolderTemplate: albumFolderTemplate.value.trim() || '{album}',
+        albumArtist: album.artist,
       },
     })
     enqueueResult.value = res
@@ -545,12 +586,16 @@ async function retryFailedEnqueue() {
         :quality="quality"
         :with-lyric="withLyric"
         :lyric-mode="lyricMode"
+        :album-download-to-folder="albumDownloadToFolder"
+        :album-folder-template="albumFolderTemplate"
         :show-back="true"
         @back="resetAlbumView"
         @enqueue="enqueueAlbumTracks"
         @update:quality="quality = $event"
         @update:with-lyric="withLyric = $event"
         @update:lyric-mode="lyricMode = $event"
+        @update:album-download-to-folder="onAlbumDownloadToFolder"
+        @update:album-folder-template="onAlbumFolderTemplate"
       />
     </div>
 
@@ -648,11 +693,15 @@ async function retryFailedEnqueue() {
             :quality="quality"
             :with-lyric="withLyric"
             :lyric-mode="lyricMode"
+            :album-download-to-folder="albumDownloadToFolder"
+            :album-folder-template="albumFolderTemplate"
             :show-back="false"
             @enqueue="enqueueAlbumTracks"
             @update:quality="quality = $event"
             @update:with-lyric="withLyric = $event"
             @update:lyric-mode="lyricMode = $event"
+            @update:album-download-to-folder="onAlbumDownloadToFolder"
+            @update:album-folder-template="onAlbumFolderTemplate"
           />
         </template>
         <p v-else class="muted">
