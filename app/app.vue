@@ -3,6 +3,11 @@ const route = useRoute()
 const config = useRuntimeConfig()
 const pageSession = usePageSession()
 const { dialogOpen, latest, deployMode, dismissUpdate } = useAppUpdate()
+const { current, collapsed } = usePlayer()
+
+const showMiniPlayerInset = computed(
+  () => route.path !== '/login' && !!current.value && !collapsed.value,
+)
 
 useHead({
   title: () => config.public.appName,
@@ -36,12 +41,19 @@ useHead({
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'has-bottom-nav': route.path !== '/login' }">
+  <div
+    class="app-shell"
+    :class="{
+      'has-bottom-nav': route.path !== '/login',
+      'has-mini-player': showMiniPlayerInset,
+    }"
+  >
     <AppHeader v-if="route.path !== '/login'" />
     <main class="app-main">
       <!-- 会话内 keepalive；退出登录 bump pageSession 销毁全部页面实例 -->
       <NuxtPage :key="pageSession" :keepalive="{ max: 10 }" />
     </main>
+    <AppMiniPlayer v-if="route.path !== '/login'" />
     <AppBottomNav v-if="route.path !== '/login'" />
     <AppToast />
     <UpdateChangelogDialog

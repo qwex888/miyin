@@ -56,12 +56,16 @@ const lyricMode = ref<'external' | 'embedded'>('external')
 const albumDownloadToFolder = ref(true)
 const albumFolderTemplate = ref('{album}')
 let albumFolderSaveTimer: ReturnType<typeof setTimeout> | null = null
-const { play, current, playing, toggle, stop } = usePlayer()
+const { play, stop, current } = usePlayer()
 const toast = useToast()
 const detailSheetOpen = ref(false)
 const downloading = ref(false)
-const previewing = ref(false)
+const previewingTrackId = ref<string | null>(null)
 let previewAbort: AbortController | null = null
+
+const previewBusy = computed(
+  () => previewingTrackId.value !== null && selected.value?.id === previewingTrackId.value,
+)
 const enqueueResult = ref<EnqueueResultPayload | null>(null)
 const showEnqueueResult = ref(false)
 const {
@@ -369,7 +373,7 @@ async function preview() {
   stop()
   const abortController = new AbortController()
   previewAbort = abortController
-  previewing.value = true
+  previewingTrackId.value = selected.value.id
   try {
     const res = await $fetch<{ url: string; quality: string }>('/api/preview', {
       method: 'POST',
@@ -394,19 +398,17 @@ async function preview() {
   } finally {
     if (previewAbort === abortController) {
       previewAbort = null
-      previewing.value = false
+      previewingTrackId.value = null
     }
   }
 }
 
-function stopPreview() {
-  if (previewAbort) {
-    previewAbort.abort()
-    previewAbort = null
-  }
-  previewing.value = false
-  stop()
-}
+watch(current, (track) => {
+  if (track || !previewAbort) return
+  previewAbort.abort()
+  previewAbort = null
+  previewingTrackId.value = null
+})
 
 async function download() {
   if (!selected.value || downloading.value) return
@@ -680,8 +682,8 @@ async function retryFailedEnqueue() {
             </select>
           </label>
           <div class="actions">
-            <button class="btn btn-ghost" type="button" @click="preview">
-              {{ previewing ? '取链中…' : '试听' }}
+            <button class="btn btn-ghost" type="button" :disabled="previewBusy" @click="preview">
+              {{ previewBusy ? '取链中…' : '试听' }}
             </button>
             <button class="btn" type="button" @click="download">下载</button>
           </div>
@@ -756,8 +758,8 @@ async function retryFailedEnqueue() {
               </select>
             </label>
             <div class="actions">
-              <button class="btn btn-ghost" type="button" @click="preview">
-                {{ previewing ? '取链中…' : '试听' }}
+              <button class="btn btn-ghost" type="button" :disabled="previewBusy" @click="preview">
+                {{ previewBusy ? '取链中…' : '试听' }}
               </button>
               <button class="btn" type="button" :disabled="downloading" @click="download">
                 {{ downloading ? '入队中…' : '下载' }}
@@ -768,33 +770,6 @@ async function retryFailedEnqueue() {
       </div>
     </Teleport>
 
-    <div v-if="current" class="mini">
-      <span class="mini-title">{{ current.title }} - {{ current.artist }}</span>
-      <div class="mini-actions">
-        <button
-          class="mini-icon-btn"
-          type="button"
-          :aria-label="playing ? '暂停' : '播放'"
-          @click="toggle"
-        >
-          <svg v-if="playing" class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
-            <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
-          </svg>
-          <svg v-else class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 5.5v13l11-6.5-11-6.5z" fill="currentColor" />
-          </svg>
-        </button>
-        <button class="mini-icon-btn" type="button" aria-label="关闭试听" @click="stopPreview">
-          <svg class="mini-ico" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M6.4 6.4a1 1 0 0 1 1.4 0L12 10.6l4.2-4.2a1 1 0 1 1 1.4 1.4L13.4 12l4.2 4.2a1 1 0 0 1-1.4 1.4L12 13.4l-4.2 4.2a1 1 0 0 1-1.4-1.4L10.6 12 6.4 7.8a1 1 0 0 1 0-1.4z"
-              fill="currentColor"
-            />
-          </svg>
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -928,13 +903,6 @@ async function retryFailedEnqueue() {
   .actions .btn {
     width: 100%;
   }
-  .mini {
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-    left: 10px;
-    right: 10px;
-    gap: 8px;
-    font-size: 13px;
-  }
 }
 
 @media (max-width: 860px) and (min-width: 769px) {
@@ -1021,59 +989,6 @@ async function retryFailedEnqueue() {
   padding: 24px;
   text-align: center;
 }
-.mini {
-  position: fixed;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  z-index: 35;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  box-shadow: var(--shadow);
-}
-.mini-title {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mini-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.mini-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-}
-.mini-icon-btn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.mini-ico {
-  width: 18px;
-  height: 18px;
-  display: block;
-}
-
 .detail-sheet-overlay {
   position: fixed;
   inset: 0;

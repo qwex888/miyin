@@ -369,3 +369,13 @@ select {
   font-size: 1rem;
   font-weight: 600;
 }
+
+/* 全局试听栏展开时，为内部滚动区预留底部空间 */
+.app-shell.has-mini-player {
+  --mini-player-inset: 120px;
+}
+.app-shell.has-mini-player .virtual-list,
+.app-shell.has-mini-player .detail,
+.app-shell.has-mini-player .album-detail-wrap {
+  padding-bottom: var(--mini-player-inset);
+}
