@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, writeFileSync, renameSync, unlinkSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, renameSync, unlinkSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename, extname } from 'node:path'
 import { randomUUID } from 'node:crypto'

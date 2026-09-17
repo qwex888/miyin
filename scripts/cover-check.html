@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>封面检测 · Cover Check</title>
+  <style>
+    :root {
+      --bg: #0f1218;
+      --panel: #171c26;
+      --border: #2a3344;
+      --text: #e8edf5;
+      --muted: #8b97ab;
+      --ok: #3ecf8e;
+      --bad: #f07178;
+      --warn: #e6c07b;
+      --accent: #6ea8fe;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2740 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #1b2433 0%, transparent 50%),
+        var(--bg);
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 1.45rem;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+    .sub { color: var(--muted); margin-bottom: 22px; font-size: 0.92rem; }
+    .drop {
+      border: 1.5px dashed var(--border);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      padding: 36px 20px;
+      text-align: center;
+      transition: border-color .15s, background .15s, transform .15s;
+      cursor: pointer;
+    }
+    .drop:hover, .drop.drag {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+    }
+    .drop.drag { transform: scale(1.01); }
+    .drop strong { color: var(--accent); }
+    .hint { margin-top: 8px; color: var(--muted); font-size: 0.85rem; }
+    input[type="file"] { display: none; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 16px 0 8px;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font: inherit;
+    }
+    button:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .stats { color: var(--muted); font-size: 0.88rem; margin-left: auto; }
+    .list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .card {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 12px 14px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .thumb {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      background: #0b0e14;
+      border: 1px solid var(--border);
+      object-fit: cover;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.75rem;
+      overflow: hidden;
+    }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .meta { min-width: 0; }
+    .name {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .detail { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+    .badge {
+      font-size: 0.78rem;
+      font-weight: 650;
+      padding: 5px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+    .badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+    .badge.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+    .badge.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+    @media (max-width: 560px) {
+      .card { grid-template-columns: 56px 1fr; }
+      .badge { grid-column: 2; justify-self: start; }
+      .thumb { width: 56px; height: 56px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>封面检测</h1>
+    <p class="sub">本地解析，不上传。支持 FLAC / MP3 / M4A·MP4（covr）。可拖文件夹内多个文件。</p>
+
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="选择或拖入音频文件">
+      <div>拖入音频文件到这里，或 <strong>点击选择</strong></div>
+      <div class="hint">.flac · .mp3 · .m4a · .mp4 · .aac</div>
+    </div>
+    <input id="file" type="file" multiple accept="audio/*,.flac,.mp3,.m4a,.mp4,.aac,.ogg,.wav" />
+
+    <div class="toolbar">
+      <button type="button" id="clear" disabled>清空列表</button>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="list" id="list"></div>
+  </main>
+
+  <script>
+    const drop = document.getElementById('drop')
+    const input = document.getElementById('file')
+    const list = document.getElementById('list')
+    const clearBtn = document.getElementById('clear')
+    const statsEl = document.getElementById('stats')
+
+    /** @type {{ url?: string }[]} */
+    const objectUrls = []
+
+    function fmtSize(n) {
+      if (n < 1024) return n + ' B'
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+      return (n / (1024 * 1024)).toFixed(2) + ' MB'
+    }
+
+    function extOf(name) {
+      const i = name.lastIndexOf('.')
+      return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
+    }
+
+    function readAscii(view, offset, len) {
+      let s = ''
+      for (let i = 0; i < len; i++) s += String.fromCharCode(view.getUint8(offset + i))
+      return s
+    }
+
+    function synchsafeToInt(b0, b1, b2, b3) {
+      return ((b0 & 0x7f) << 21) | ((b1 & 0x7f) << 14) | ((b2 & 0x7f) << 7) | (b3 & 0x7f)
+    }
+
+    /**
+     * @returns {{ hasCover: boolean, mime?: string, bytes?: Uint8Array, note?: string } | null}
+     */
+    function parseFlac(buf) {
+      const view = new DataView(buf)
+      if (buf.byteLength < 4 || readAscii(view, 0, 4) !== 'fLaC') return null
+      let pos = 4
+      for (let i = 0; i < 128 && pos + 4 <= buf.byteLength; i++) {
+        const header = view.getUint8(pos)
+        const isLast = (header & 0x80) !== 0
+        const type = header & 0x7f
+        const size = (view.getUint8(pos + 1) << 16) | (view.getUint8(pos + 2) << 8) | view.getUint8(pos + 3)
+        const dataStart = pos + 4
+        if (type === 6 && size > 0 && dataStart + size <= buf.byteLength) {
+          // METADATA_BLOCK_PICTURE
+          let p = dataStart
+          p += 4 // picture type
+          const mimeLen = view.getUint32(p); p += 4
+          const mime = readAscii(view, p, mimeLen); p += mimeLen
+          const descLen = view.getUint32(p); p += 4 + descLen
+          p += 16 // width height depth colors
+          const dataLen = view.getUint32(p); p += 4
+          if (p + dataLen <= dataStart + size) {
+            return { hasCover: true, mime: mime || 'image/jpeg', bytes: new Uint8Array(buf, p, dataLen) }
+          }
+          return { hasCover: true, note: '检测到 PICTURE 块，但图片数据异常' }
+        }
+        pos = dataStart + size
+        if (isLast) break
+      }
+      return { hasCover: false }
+    }
+
+    function parseMp3(buf) {
+      const view = new DataView(buf)
+      if (buf.byteLength < 10 || readAscii(view, 0, 3) !== 'ID3') {
+        return { hasCover: false, note: '无 ID3v2 标签' }
+      }
+      const ver = view.getUint8(3)
+      const flags = view.getUint8(4)
+      const tagSize = synchsafeToInt(view.getUint8(6), view.getUint8(7), view.getUint8(8), view.getUint8(9))
+      let pos = 10
+      if (flags & 0x40) {
+        // extended header
+        if (ver === 4) {
+          const ext = synchsafeToInt(view.getUint8(pos), view.getUint8(pos + 1), view.getUint8(pos + 2), view.getUint8(pos + 3))
+          pos += ext
+        } else {
+          const ext = view.getUint32(pos)
+          pos += ext
+        }
+      }
+      const end = Math.min(10 + tagSize, buf.byteLength)
+      while (pos + 10 <= end) {
+        const id = readAscii(view, pos, 4)
+        if (id === '\u0000\u0000\u0000\u0000' || !/^[\x20-\x7e]{4}$/.test(id)) break
+        let frameSize
+        if (ver === 4) {
+          frameSize = synchsafeToInt(view.getUint8(pos + 4), view.getUint8(pos + 5), view.getUint8(pos + 6), view.getUint8(pos + 7))
+        } else {
+          frameSize = view.getUint32(pos + 4)
+        }
+        const frameStart = pos + 10
+        if (frameSize <= 0 || frameStart + frameSize > end) break
+        if (id === 'APIC') {
+          let p = frameStart
+          const encoding = view.getUint8(p); p += 1
+          // MIME null-terminated (latin1)
+          let mime = ''
+          while (p < frameStart + frameSize && view.getUint8(p) !== 0) {
+            mime += String.fromCharCode(view.getUint8(p)); p++
+          }
+          p += 1 // null
+          p += 1 // picture type
+          // description
+          if (encoding === 0 || encoding === 3) {
+            while (p < frameStart + frameSize && view.getUint8(p) !== 0) p++
+            p += 1
+          } else {
+            while (p + 1 < frameStart + frameSize && !(view.getUint8(p) === 0 && view.getUint8(p + 1) === 0)) p += 2
+            p += 2
+          }
+          if (p < frameStart + frameSize) {
+            const bytes = new Uint8Array(buf, p, frameStart + frameSize - p)
+            return { hasCover: true, mime: mime || 'image/jpeg', bytes }
+          }
+          return { hasCover: true, note: '检测到 APIC，但图片数据异常' }
+        }
+        pos = frameStart + frameSize
+      }
+      return { hasCover: false }
+    }
+
+    /** Best-effort: find 'covr' atom and following data */
+    function parseMp4(buf) {
+      const view = new DataView(buf)
+      const bytes = new Uint8Array(buf)
+      const needle = [0x63, 0x6f, 0x76, 0x72] // covr
+      for (let i = 0; i + 16 < bytes.length; i++) {
+        if (bytes[i] === needle[0] && bytes[i + 1] === needle[1] && bytes[i + 2] === needle[2] && bytes[i + 3] === needle[3]) {
+          // atom layout: size(4) 'covr'(4) ... data atom
+          // Search nearby for 'data' atom
+          for (let j = i + 4; j < Math.min(i + 64, bytes.length - 16); j++) {
+            if (readAscii(view, j, 4) === 'data') {
+              // size is 4 bytes before 'data'
+              const dataSize = view.getUint32(j - 4)
+              const type = view.getUint32(j + 4) // type/version flags region varies
+              // iTunes: after 'data' + version/flags(4) + locale(4) = payload
+              const payloadStart = j + 4 + 4 + 4
+              const payloadLen = dataSize - 8 - 8
+              if (payloadLen > 32 && payloadStart + payloadLen <= buf.byteLength) {
+                const slice = new Uint8Array(buf, payloadStart, payloadLen)
+                let mime = 'image/jpeg'
+                if (slice[0] === 0x89 && slice[1] === 0x50) mime = 'image/png'
+                return { hasCover: true, mime, bytes: slice, note: 'MP4 covr（尽力解析）' }
+              }
+            }
+          }
+          return { hasCover: true, note: '发现 covr 标记，但未能抽出图片' }
+        }
+      }
+      return { hasCover: false }
+    }
+
+    function sniffAndParse(buf, filename) {
+      const view = new DataView(buf)
+      const ext = extOf(filename)
+      if (buf.byteLength >= 4 && readAscii(view, 0, 4) === 'fLaC') return { format: 'FLAC', ...parseFlac(buf) }
+      if (buf.byteLength >= 3 && readAscii(view, 0, 3) === 'ID3') return { format: 'MP3', ...parseMp3(buf) }
+      if (buf.byteLength >= 8 && readAscii(view, 4, 4) === 'ftyp') return { format: 'MP4/M4A', ...parseMp4(buf) }
+      // extension fallback
+      if (ext === 'flac') return { format: 'FLAC?', hasCover: false, note: '扩展名是 flac，但文件头不是 fLaC' }
+      if (ext === 'mp3') return { format: 'MP3?', ...parseMp3(buf) }
+      if (ext === 'm4a' || ext === 'mp4' || ext === 'aac') return { format: ext.toUpperCase(), ...parseMp4(buf) }
+      if (ext === 'ogg' || ext === 'opus' || ext === 'wav') {
+        return { format: ext.toUpperCase(), hasCover: false, note: '暂不解析该格式的封面' }
+      }
+      return { format: ext ? ext.toUpperCase() : '未知', hasCover: false, note: '不支持的格式' }
+    }
+
+    function updateStats() {
+      const cards = [...list.querySelectorAll('.card')]
+      const ok = cards.filter((c) => c.dataset.status === 'ok').length
+      const bad = cards.filter((c) => c.dataset.status === 'bad').length
+      const warn = cards.filter((c) => c.dataset.status === 'warn').length
+      statsEl.textContent = cards.length
+        ? `共 ${cards.length} · 有封面 ${ok} · 无封面 ${bad}${warn ? ` · 其它 ${warn}` : ''}`
+        : ''
+      clearBtn.disabled = cards.length === 0
+    }
+
+    function addResult(file, result) {
+      const card = document.createElement('div')
+      card.className = 'card'
+
+      const thumb = document.createElement('div')
+      thumb.className = 'thumb'
+
+      let status = 'bad'
+      let label = '无封面'
+      if (result.hasCover && result.bytes && result.bytes.length > 0) {
+        status = 'ok'
+        label = '有封面'
+        const blob = new Blob([result.bytes], { type: result.mime || 'image/jpeg' })
+        const url = URL.createObjectURL(blob)
+        objectUrls.push({ url })
+        const img = document.createElement('img')
+        img.alt = 'cover'
+        img.src = url
+        img.onerror = () => { thumb.textContent = '图损坏'; }
+        thumb.appendChild(img)
+      } else if (result.hasCover) {
+        status = 'warn'
+        label = '疑似有'
+        thumb.textContent = '?'
+      } else if (result.note && /不支持|暂不/.test(result.note)) {
+        status = 'warn'
+        label = '未检测'
+        thumb.textContent = '—'
+      } else {
+        thumb.textContent = '无'
+      }
+
+      const meta = document.createElement('div')
+      meta.className = 'meta'
+      const name = document.createElement('div')
+      name.className = 'name'
+      name.title = file.name
+      name.textContent = file.name
+      const detail = document.createElement('div')
+      detail.className = 'detail'
+      const parts = [result.format, fmtSize(file.size)]
+      if (result.mime) parts.push(result.mime)
+      if (result.bytes) parts.push(fmtSize(result.bytes.length) + ' 图')
+      if (result.note) parts.push(result.note)
+      detail.textContent = parts.join(' · ')
+      meta.append(name, detail)
+
+      const badge = document.createElement('span')
+      badge.className = 'badge ' + status
+      badge.textContent = label
+
+      card.dataset.status = status
+      card.append(thumb, meta, badge)
+      list.prepend(card)
+      updateStats()
+    }
+
+    async function handleFiles(fileList) {
+      const files = [...fileList].filter((f) => f && f.size >= 0)
+      for (const file of files) {
+        try {
+          if (file.size === 0) {
+            addResult(file, { format: extOf(file.name).toUpperCase() || '空文件', hasCover: false, note: '0 字节' })
+            continue
+          }
+          // 读前 8MB 足够标签/元数据；超大文件封面通常在头部
+          const slice = file.size > 8 * 1024 * 1024 ? file.slice(0, 8 * 1024 * 1024) : file
+          const buf = await slice.arrayBuffer()
+          const result = sniffAndParse(buf, file.name)
+          addResult(file, result)
+        } catch (e) {
+          addResult(file, { format: '错误', hasCover: false, note: String(e && e.message || e) })
+        }
+      }
+    }
+
+    drop.addEventListener('click', () => input.click())
+    drop.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click() }
+    })
+    input.addEventListener('change', () => {
+      if (input.files?.length) handleFiles(input.files)
+      input.value = ''
+    })
+
+    ;['dragenter', 'dragover'].forEach((ev) => {
+      drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('drag') })
+    })
+    ;['dragleave', 'drop'].forEach((ev) => {
+      drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('drag') })
+    })
+    drop.addEventListener('drop', (e) => {
+      const files = e.dataTransfer?.files
+      if (files?.length) handleFiles(files)
+    })
+
+    clearBtn.addEventListener('click', () => {
+      for (const o of objectUrls) URL.revokeObjectURL(o.url)
+      objectUrls.length = 0
+      list.innerHTML = ''
+      updateStats()
+    })
+  </script>
+</body>
+</html>

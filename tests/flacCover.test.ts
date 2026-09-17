@@ -4,31 +4,40 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { writeAudioMetadata, flacHasPictureBlock } from '../server/services/metadataService'
 
+/**
+ * 必须用不含 PICTURE 的样本；若样本本身已有封面，`-map 0 -c copy` 会保留旧封面，
+ * 导致即使封面下载/转换失败也能「通过」。
+ */
+const COVERLESS_SAMPLE = '/Users/huangdongliang/code/miyin/downloads/毛不易 - 消愁.flac'
+const COVER_URL =
+  'https://p1.music.126.net/vmCcDvD1H04e9gm97xsCqg==/109951163350929740.jpg'
+
 describe('flac cover embed', () => {
   it(
-    'embeds jpeg picture block for flac',
+    'embeds jpeg picture block for coverless flac',
     async () => {
-      const sample = '/Users/huangdongliang/code/miyin/downloads/邓垚 - 诀别书.flac'
-      if (!existsSync(sample)) return
+      if (!existsSync(COVERLESS_SAMPLE)) return
+      expect(flacHasPictureBlock(COVERLESS_SAMPLE)).toBe(false)
+
       const dir = mkdtempSync(join(tmpdir(), 'miyin-flac-cover-'))
       const src = join(dir, 'sample.flac')
       try {
-        copyFileSync(sample, src)
+        copyFileSync(COVERLESS_SAMPLE, src)
         const r = await writeAudioMetadata(
           src,
           {
-            title: '诀别书',
-            artist: '邓垚',
-            album: '诀别书',
+            title: '消愁',
+            artist: '毛不易',
+            album: '平凡的一天',
             platform: 'wy',
             quality: 'flac',
-            external_id: '2038191895',
+            external_id: '569200213',
           },
           {
-            name: '诀别书',
-            singer: '邓垚',
-            albumName: '诀别书',
-            img: 'http://p2.music.126.net/wztA5smxFjIfv98u7-IrQQ==/109951168933355255.jpg',
+            name: '消愁',
+            singer: '毛不易',
+            albumName: '平凡的一天',
+            img: COVER_URL,
           },
           null,
         )
