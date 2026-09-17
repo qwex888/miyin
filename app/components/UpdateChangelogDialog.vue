@@ -70,8 +70,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <p v-if="upgradeHint" class="hint">{{ upgradeHint }}</p>
 
         <div class="footer">
-          <button class="btn btn-ghost" type="button" @click="onDismiss">稍后再说</button>
-          <button class="btn" type="button" @click="onClose">关闭</button>
+          <button class="btn btn-ghost" type="button" @click="onDismiss">忽略此版本</button>
+          <button class="btn" type="button" @click="onClose">稍后再说</button>
         </div>
       </div>
     </div>

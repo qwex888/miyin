@@ -171,6 +171,7 @@ async function searchKw(keyword: string, page: number, opts?: { signal?: AbortSi
         songmid: id,
         hash: id,
         source: 'kw',
+        img: s.web_albumpic_short ? `https://img2.kuwo.cn/star/albumcover/${s.web_albumpic_short}` : undefined,
         interval: formatIntervalFromSec(Number(s.DURATION || 0)),
       },
     }
@@ -235,6 +236,7 @@ async function searchTx(keyword: string, page: number, opts?: { signal?: AbortSi
         songid: s.songid || s.id,
         strMediaMid: s.strMediaMid,
         source: 'tx',
+        img: s.albummid ? `https://y.qq.com/music/photo_new/T002R300x300M000${s.albummid}.jpg` : undefined,
         interval: formatIntervalFromSec(Number(s.interval || 0)),
       },
     }

@@ -272,6 +272,7 @@ export function mapTxAlbumSong(s: any, albumTitle = '', albummid = ''): SearchTr
       songid: s.songid || s.id,
       strMediaMid: s.strMediaMid || s.media_mid,
       source: 'tx',
+      img: cover,
       interval: formatIntervalFromSec(Number(s.interval || 0)),
     },
   }
@@ -340,9 +341,10 @@ export function mapKwSearchAlbums(raw: any[]): SearchAlbum[] {
   })
 }
 
-export function mapKwAlbumSong(s: any, albumTitle = ''): SearchTrack {
+export function mapKwAlbumSong(s: any, albumTitle = '', albumCover?: string): SearchTrack {
   const id = String(s.MUSICRID || s.DC_TARGETID || s.id || '').replace('MUSIC_', '')
   const pic = s.web_albumpic_short
+  const cover = pic ? `https://img2.kuwo.cn/star/albumcover/${pic}` : albumCover
   return {
     id: `kw:${id}`,
     externalId: id,
@@ -351,7 +353,7 @@ export function mapKwAlbumSong(s: any, albumTitle = ''): SearchTrack {
     album: decode(s.ALBUM || albumTitle),
     duration: Number(s.DURATION || s.duration || 0),
     platform: 'kw',
-    cover: pic ? `https://img2.kuwo.cn/star/albumcover/${pic}` : undefined,
+    cover,
     qualitys: ['128k', '320k'],
     musicInfo: {
       name: decode(s.NAME || s.SONGNAME || s.name),
@@ -360,6 +362,7 @@ export function mapKwAlbumSong(s: any, albumTitle = ''): SearchTrack {
       songmid: id,
       hash: id,
       source: 'kw',
+      img: cover,
       interval: formatIntervalFromSec(Number(s.DURATION || s.duration || 0)),
     },
   }
@@ -370,17 +373,18 @@ export function mapKwAlbumDetail(data: any, albumId: string): AlbumDetail {
   const id = String(albumRaw?.albumid || albumRaw?.id || albumId)
   const albumTitle = decode(albumRaw?.name || albumRaw?.ALBUM || '未知')
   const pic = albumRaw?.pic || albumRaw?.web_albumpic_short
+  const albumCover = pic ? `https://img2.kuwo.cn/star/albumcover/${pic}` : undefined
   const album: SearchAlbum = {
     id: `kw:${id}`,
     externalId: id,
     title: albumTitle,
     artist: decode(albumRaw?.artist || albumRaw?.ARTIST || '未知'),
     trackCount: albumRaw?.songnum ? Number(albumRaw.songnum) : undefined,
-    cover: pic ? `https://img2.kuwo.cn/star/albumcover/${pic}` : undefined,
+    cover: albumCover,
     platform: 'kw',
   }
   const songList = data?.musiclist || data?.data?.musiclist || data?.abslist || []
-  const tracks = polishTracks(songList.map((s: any) => mapKwAlbumSong(s, albumTitle)))
+  const tracks = polishTracks(songList.map((s: any) => mapKwAlbumSong(s, albumTitle, albumCover)))
   return { album, tracks }
 }
 
@@ -450,7 +454,7 @@ export function mapKgSearchAlbums(raw: any[]): SearchAlbum[] {
 }
 
 /** kg 专辑曲目：filename 多为「歌手 - 歌名」，hash/duration 小写 */
-export function mapKgAlbumSong(s: any, albumTitle = ''): SearchTrack {
+export function mapKgAlbumSong(s: any, albumTitle = '', albumCover?: string): SearchTrack {
   const hash = String(s.FileHash || s.HQFileHash || s.hash || '')
   let title = s.SongName || s.OriSongName || s.name || s.songname || ''
   let artist = s.SingerName || s.singername || artistsJoin(s.Singers, 'name')
@@ -467,6 +471,7 @@ export function mapKgAlbumSong(s: any, albumTitle = ''): SearchTrack {
   if (!title) title = '未知'
   if (!artist) artist = '未知'
   const duration = Number(s.Duration || s.duration || 0)
+  const cover = s.Image?.replace('{size}', '240') || albumCover
   return {
     id: `kg:${hash}`,
     externalId: hash,
@@ -475,7 +480,7 @@ export function mapKgAlbumSong(s: any, albumTitle = ''): SearchTrack {
     album: s.AlbumName || s.albumname || albumTitle || '',
     duration,
     platform: 'kg',
-    cover: s.Image?.replace('{size}', '240'),
+    cover,
     qualitys: ['128k', '320k'],
     musicInfo: {
       name: title,
@@ -484,7 +489,7 @@ export function mapKgAlbumSong(s: any, albumTitle = ''): SearchTrack {
       hash,
       songmid: hash,
       source: 'kg',
-      img: s.Image?.replace('{size}', '240'),
+      img: cover,
       interval: formatIntervalFromSec(duration),
     },
   }
@@ -527,7 +532,7 @@ export function mapKgAlbumDetail(
     platform: 'kg',
     publishTime: infoObj?.publishtime ? String(infoObj.publishtime) : undefined,
   }
-  const tracks = polishTracks(list.map((s: any) => mapKgAlbumSong(s, albumTitle)))
+  const tracks = polishTracks(list.map((s: any) => mapKgAlbumSong(s, albumTitle, cover)))
   return { album, tracks }
 }
 

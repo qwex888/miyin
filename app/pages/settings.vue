@@ -331,7 +331,10 @@ useRegisterPageRefresh(async () => {
       <div class="version-row">
         <div>
           <p class="version-label">当前版本</p>
-          <p class="version-value">v{{ currentVersion }}</p>
+          <p class="version-value">
+            <span>v{{ currentVersion }}</span>
+            <span v-if="showBadge" class="version-update-badge">有更新</span>
+          </p>
         </div>
         <button class="btn btn-ghost btn-sm" type="button" :disabled="checking || loading" @click="onCheckUpdate">
           {{ checking ? '检查中…' : '检查更新' }}
@@ -612,8 +615,23 @@ useRegisterPageRefresh(async () => {
 }
 .version-value {
   margin: 4px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 18px;
   font-weight: 700;
+}
+.version-update-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
 }
 .update-banner {
   display: flex;

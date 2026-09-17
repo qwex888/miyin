@@ -249,6 +249,36 @@ function albumName(song: any): string {
   return song?.albumname || song?.albumName || ''
 }
 
+function qqAlbumCoverUrl(song: any): string | undefined {
+  const mid = String(
+    song?.album?.mid || song?.album?.pmid || song?.albummid || song?.albumMid || '',
+  )
+  if (!mid) return undefined
+  return `https://y.qq.com/music/photo_new/T002R300x300M000${mid}.jpg`
+}
+
+function kwCoverUrl(song: Record<string, unknown>): string | undefined {
+  const pic = String(
+    song.web_albumpic_short || song.albumpic || song.pic || song.album_pic || '',
+  ).trim()
+  if (!pic) return undefined
+  if (/^https?:\/\//i.test(pic)) return pic
+  return `https://img2.kuwo.cn/star/albumcover/${pic}`
+}
+
+function kgCoverUrl(song: Record<string, unknown>): string | undefined {
+  const albumInfo = song.albuminfo as Record<string, unknown> | undefined
+  const raw =
+    song.Image ||
+    song.imgurl ||
+    song.cover ||
+    song.album_img ||
+    albumInfo?.sizable_cover ||
+    albumInfo?.img
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+  return raw.replace('{size}', '240')
+}
+
 function songTitle(song: any): string {
   return song?.name || song?.songname || song?.title || '未知'
 }
@@ -264,6 +294,7 @@ function buildMusicInfoFromIds(input: {
   title: string
   artist: string
   album?: string
+  img?: string
 }): Record<string, unknown> {
   return {
     name: input.title,
@@ -272,6 +303,7 @@ function buildMusicInfoFromIds(input: {
     songmid: input.externalId,
     hash: input.externalId,
     source: input.platform,
+    ...(input.img ? { img: input.img } : {}),
   }
 }
 
@@ -282,6 +314,7 @@ function mapQqSongs(songs: any[]): PlaylistTrackDraft[] {
       const title = songTitle(s)
       const artist = joinArtists(s.singer)
       const album = albumName(s)
+      const img = qqAlbumCoverUrl(s)
       return {
         externalId: mid || undefined,
         title,
@@ -296,6 +329,7 @@ function mapQqSongs(songs: any[]): PlaylistTrackDraft[] {
               title,
               artist,
               album,
+              img,
             })
           : undefined,
         matchMethod: mid ? 'id' : undefined,
@@ -668,6 +702,7 @@ function mapKugouPlaylistSongs(rows: unknown[]): PlaylistTrackDraft[] {
       )
       const albumInfo = song.albuminfo as Record<string, unknown> | undefined
       const album = String(song.album_name || albumInfo?.name || '')
+      const img = kgCoverUrl(song)
       return {
         externalId: hash || undefined,
         title: split.title,
@@ -682,6 +717,7 @@ function mapKugouPlaylistSongs(rows: unknown[]): PlaylistTrackDraft[] {
               title: split.title,
               artist: split.artist,
               album,
+              img,
             })
           : undefined,
         matchMethod: hash ? 'id' : undefined,
@@ -920,22 +956,25 @@ async function parseKuwoPlaylist(
       const song = (s || {}) as Record<string, unknown>
       const rid = String(song.rid || String(song.musicrid || '').replace(/^MUSIC_/i, '') || '')
       const name = String(song.name || song.SONGNAME || '未知')
+      const artist = String(song.artist || song.ARTIST || '未知')
+      const album = String(song.album || song.ALBUM || '')
+      const img = kwCoverUrl(song)
       return {
         externalId: rid || undefined,
         title: name,
-        artist: String(song.artist || song.ARTIST || '未知'),
-        album: String(song.album || song.ALBUM || ''),
+        artist,
+        album,
         duration: Number(song.duration || 0) || undefined,
         platform: 'kw',
         musicInfo: rid
-          ? {
-              name,
-              singer: String(song.artist || song.ARTIST || '未知'),
-              albumName: String(song.album || song.ALBUM || ''),
-              songmid: rid,
-              hash: rid,
-              source: 'kw',
-            }
+          ? buildMusicInfoFromIds({
+              platform: 'kw',
+              externalId: rid,
+              title: name,
+              artist,
+              album,
+              img,
+            })
           : undefined,
         matchMethod: rid ? 'id' : undefined,
       } satisfies PlaylistTrackDraft
@@ -1091,6 +1130,7 @@ function mapNeteaseSong(s: any): PlaylistTrackDraft {
   const title = s.name || '未知'
   const artist = artists.map((a: any) => a.name).filter(Boolean).join(' / ') || '未知'
   const album = s.al?.name || s.album?.name || ''
+  const img = s.al?.picUrl || s.album?.picUrl || undefined
   return {
     externalId,
     title,
@@ -1104,6 +1144,7 @@ function mapNeteaseSong(s: any): PlaylistTrackDraft {
       title,
       artist,
       album,
+      img,
     }),
     matchMethod: 'id',
   }

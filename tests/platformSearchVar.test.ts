@@ -115,6 +115,7 @@ describe('platformSearch variable declarations and adapter mapping (offline dete
     expect(track.musicInfo.hash).toBe('348424')
     expect(track.musicInfo.name).toBe('晴天')
     expect(track.musicInfo.singer).toBe('周杰伦')
+    expect(track.musicInfo.img).toBe('https://img2.kuwo.cn/star/albumcover/12345.jpg')
   })
 
   it('maps kg (Kugou) response correctly with FileHash without ReferenceError', async () => {
@@ -155,6 +156,7 @@ describe('platformSearch variable declarations and adapter mapping (offline dete
     expect(track.musicInfo.source).toBe('kg')
     expect(track.musicInfo.hash).toBe('ABCDEF1234567890ABCDEF1234567890')
     expect(track.musicInfo.songmid).toBe('ABCDEF1234567890ABCDEF1234567890')
+    expect(track.musicInfo.img).toBe('https://imge.kugou.com/240/cover.jpg')
   })
 
   it('maps tx (Tencent/QQ) response correctly with songmid/mid without ReferenceError', async () => {
@@ -199,6 +201,9 @@ describe('platformSearch variable declarations and adapter mapping (offline dete
     expect(track.musicInfo.source).toBe('tx')
     expect(track.musicInfo.songmid).toBe('0039MnYb0qxYgn')
     expect(track.musicInfo.songid).toBe(107192078)
+    expect(track.musicInfo.img).toBe(
+      'https://y.qq.com/music/photo_new/T002R300x300M000000bviBl4F5P1N.jpg',
+    )
   })
 
   it('throws structured error via createError when input is invalid or unsupported', async () => {

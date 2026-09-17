@@ -53,6 +53,7 @@ describe('mapWyAlbumDetail', () => {
     expect(detail.tracks).toHaveLength(1)
     expect(detail.tracks[0]!.musicInfo.source).toBe('wy')
     expect(detail.tracks[0]!.musicInfo.songmid).toBe('456')
+    expect(detail.tracks[0]!.musicInfo.img).toBe('http://pic')
     expect(detail.tracks[0]!.duration).toBe(234)
   })
 })
@@ -106,6 +107,9 @@ describe('mapTxAlbumDetail', () => {
     expect(detail.tracks[0]!.musicInfo.source).toBe('tx')
     expect(detail.tracks[0]!.musicInfo.songmid).toBe('SONG001')
     expect(detail.tracks[0]!.musicInfo.songid).toBe(999)
+    expect(detail.tracks[0]!.musicInfo.img).toBe(
+      'https://y.qq.com/music/photo_new/T002R300x300M000ABC123.jpg',
+    )
   })
 })
 
@@ -127,13 +131,14 @@ describe('mapKwAlbumDetail', () => {
   it('maps kuwo album songs', () => {
     const detail = mapKwAlbumDetail(
       {
-        album: { albumid: '888', name: '测试专辑', artist: '歌手' },
+        album: { albumid: '888', name: '测试专辑', artist: '歌手', pic: 'album.jpg' },
         musiclist: [{ MUSICRID: 'MUSIC_123', NAME: '曲目1', ARTIST: '歌手', DURATION: '200' }],
       },
       '888',
     )
     expect(detail.tracks[0]!.musicInfo.source).toBe('kw')
     expect(detail.tracks[0]!.externalId).toBe('123')
+    expect(detail.tracks[0]!.musicInfo.img).toBe('https://img2.kuwo.cn/star/albumcover/album.jpg')
   })
 })
 

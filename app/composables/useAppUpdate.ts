@@ -1,4 +1,5 @@
 import type { AppDeployMode, AppUpdateCheckResult, MiyinLatestManifest } from '#shared/appUpdate'
+import { shouldShowAppUpdateBadge } from '#shared/appUpdate'
 
 const DISMISS_KEY = 'miyin-update-dismissed'
 const LAST_CHECK_KEY = 'miyin-update-last-check'
@@ -15,8 +16,8 @@ export function useAppUpdate() {
   const dialogOpen = useState<boolean>('app-update:dialog', () => false)
   const pendingOpenChangelog = useState<boolean>('app-update:pending-open', () => false)
 
-  const showBadge = computed(
-    () => hasUpdate.value && latest.value?.version !== dismissedVersion.value,
+  const showBadge = computed(() =>
+    shouldShowAppUpdateBadge(hasUpdate.value, latest.value?.version, dismissedVersion.value),
   )
 
   function loadDismissed() {
@@ -47,6 +48,16 @@ export function useAppUpdate() {
     }
   }
 
+  function clearDismissed() {
+    dismissedVersion.value = null
+    if (!import.meta.client) return
+    try {
+      localStorage.removeItem(DISMISS_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function checkForUpdate(force = false): Promise<AppUpdateCheckResult | null> {
     if (checking.value) return null
     if (shouldSkipCheck(force)) return null
@@ -56,6 +67,8 @@ export function useAppUpdate() {
       hasUpdate.value = res.hasUpdate
       latest.value = res.latest
       deployMode.value = res.deployMode || 'other'
+      // 手动检查发现更新时重新展示角标（即使用户此前点过「忽略此版本」）
+      if (force && res.hasUpdate && res.latest?.version) clearDismissed()
       markChecked()
       return res
     } catch {

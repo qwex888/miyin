@@ -107,7 +107,7 @@ describe('playlist musicInfo + externalId direct enqueue', () => {
                 id: 3345987903,
                 name: '是冬天 是告别',
                 ar: [{ name: 'h3R3' }],
-                al: { name: '单曲' },
+                al: { name: '单曲', picUrl: 'https://p1.music.126.net/cover.jpg' },
                 dt: 210000,
               },
             ],
@@ -124,6 +124,7 @@ describe('playlist musicInfo + externalId direct enqueue', () => {
     expect(draft.tracks[0]!.externalId).toBe('3345987903')
     expect(draft.tracks[0]!.musicInfo?.source).toBe('wy')
     expect(draft.tracks[0]!.musicInfo?.songmid).toBe('3345987903')
+    expect(draft.tracks[0]!.musicInfo?.img).toBe('https://p1.music.126.net/cover.jpg')
     expect(draft.tracks[0]!.matchMethod).toBe('id')
   })
 
@@ -142,7 +143,7 @@ describe('playlist musicInfo + externalId direct enqueue', () => {
                   mid: '0039MnYb0qxYhV',
                   name: '晴天',
                   singer: [{ name: '周杰伦' }],
-                  album: { name: '叶惠美' },
+                  album: { name: '叶惠美', mid: '000bviBl4F5P1N' },
                   interval: 269,
                 },
               ],
@@ -158,6 +159,9 @@ describe('playlist musicInfo + externalId direct enqueue', () => {
     expect(draft.tracks[0]!.externalId).toBe('0039MnYb0qxYhV')
     expect(draft.tracks[0]!.musicInfo?.source).toBe('tx')
     expect(draft.tracks[0]!.musicInfo?.songmid).toBe('0039MnYb0qxYhV')
+    expect(draft.tracks[0]!.musicInfo?.img).toBe(
+      'https://y.qq.com/music/photo_new/T002R300x300M000000bviBl4F5P1N.jpg',
+    )
     expect(draft.tracks[0]!.matchMethod).toBe('id')
   })
 

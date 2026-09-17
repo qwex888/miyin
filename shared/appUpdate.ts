@@ -48,3 +48,26 @@ export function isNewerVersion(remote: string, current: string): boolean {
   const c = compareSemver(remote, current)
   return c === 1
 }
+
+/** 有新版本且用户未「忽略此版本」时展示导航红点 / 设置页提示 */
+export function shouldShowAppUpdateBadge(
+  hasUpdate: boolean,
+  latestVersion: string | null | undefined,
+  dismissedVersion: string | null | undefined,
+): boolean {
+  if (!hasUpdate) return false
+  const ver = String(latestVersion || '').trim()
+  if (!ver) return false
+  return ver !== dismissedVersion
+}
+
+/** 已登录或开放模式、且不在登录页时，允许启动时检查更新 */
+export function shouldRunBootUpdateCheck(input: {
+  path: string
+  authRequired: boolean
+  loggedIn: boolean
+}): boolean {
+  if (input.path === '/login') return false
+  if (input.authRequired && !input.loggedIn) return false
+  return true
+}
