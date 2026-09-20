@@ -1,55 +1,35 @@
-## [0.5.1] - 2026-09-15
-
-### Added
-
-- 试听栏展开/收起按钮在播放中会显示轻微边框波纹动效，便于识别当前正在试听 (@qwex888)
-
-- 试听栏全局显示（切换页面保持播放），支持收起/展开、底部留白防遮挡，以及可拖动进度条；展开/收起为仅箭头样式 (@qwex888)
-
-- 专辑下载可勾选「按文件夹归档」并配置文件夹命名（默认 `{album}`，写入服务端设置）；歌单不自动建夹（@larryzbo）
-
-- 搜索页单曲/专辑支持触底自动加载更多（各平台统一每页 30 条）；空页、不满一页或请求失败时停止，避免无限重试 (@Andyong8901)
-
-- 本地可自动下载官方 fnpack（`pnpm download:fnpack` / `pnpm build:fpk`），并同步带版本号的 `.fpk` 到 `dist/`（@timor-m, PR #24）
+## [0.5.2] - 2026-09-20
 
 ### Fixed
 
-- 尝试修复 iOS 15 访问页面空白：将 Vite 构建目标设为 `safari15`，以关闭 Nuxt `#entry` importmap（需真机验证）(@qwex888)
+- 单曲与批量入队接口校验音质枚举，非法音质直接拒绝，不再产生必然失败的下载任务 (@qwex888)
 
-- 为 iOS 15.0–15.3 补齐 `Object.hasOwn` / `findLast*` polyfill，避免 Nuxt payload 解析阶段白屏（@timor-m, PR #24）
+- 歌单匹配对全括号标题、空歌手段的候选不再误加分，降低匹配错曲概率 (@qwex888)
 
-- 试听取链中展示「取链中…」，切换曲目或关闭时取消上一请求并停止缓冲 (@qwex888)
+- 取消下载任务后，取链/写元数据等滞留流程不再把任务复活为运行或完成状态 (@qwex888)
 
-- 网易/QQ/酷狗歌单解析补全 musicInfo，支持同平台 id 直通入队，避免二次搜索失败导致队列为空；批量入队无可用音源时不再假成功 (@qwex888)
+- 开启口令鉴权但未配置 SESSION_SECRET 时，会话密钥改为启动期随机生成，不再回退到固定默认值，防止伪造会话 (@qwex888)
 
-### Changed
+- 修复下载后封面嵌入：`metadataService` 漏导 `readFileSync`，封面 JPEG 转换结果校验抛错被吞掉，导致有 `img` 的曲目只写了标签却没有内嵌封面
+- 酷我 / QQ 搜索与专辑详情、以及歌单直通入队时，会把封面写入 `musicInfo.img`，下载后可正确嵌入专辑封面
+- 检查到应用有新版本后，设置导航红点与版本旁「有更新」提示会正确保留；仅「忽略此版本」会隐藏提醒（「稍后再说」只关弹窗）
+- 首次进入应用（已登录或开放模式）会自动请求更新检查并显示设置角标；登录成功后也会补检
 
-- 专辑详情曲目列表改为虚拟滚动（弹性高度 + 最小 400px 兜底），超大合集滚动更顺畅
+### Added
 
-- 音源更新提示整条可点（可一键更新则更新，否则打开说明），并将一键更新/打开说明提到提示旁始终显示；操作列仍保留 (@qwex888)
-
-- 接入 @vueuse/nuxt，底部导航用 useScreenSafeArea 适配多机型安全区 (@qwex888)
+- 单曲搜索结果支持多选批量下载，可全选已加载结果或逐条勾选后一次入队（超过 100 首需二次确认） (@timor-m)
 
 
 ---
 
 ## 技术溯源
 
-完整对比：[v0.5.0...v0.5.1](https://github.com/qwex888/miyin/compare/v0.5.0...v0.5.1)
+完整对比：[v0.5.1...v0.5.2](https://github.com/qwex888/miyin/compare/v0.5.1...v0.5.2)
 
 ### Commits
 
-- [`884edab`](https://github.com/qwex888/miyin/commit/884edab6408827a5ae169a1a60f9136a0c7164bc) feat(release): 优化发版脚本，自动同步精简更新说明到飞牛 manifest _(qwex888)_
-- [`fbd0885`](https://github.com/qwex888/miyin/commit/fbd0885f6d5b3f6bfbbc014f7bfae2c39d5db9b5) feat(player): enhance mini player functionality and UI _(qwex888)_
-- [`427efe1`](https://github.com/qwex888/miyin/commit/427efe1845fd9611b8c57606ae0f29dffcf449ba) fix(fnpack): 对齐 CLI 版本并兼容 Windows 路径 _(qwex888)_
-- [`38fb772`](https://github.com/qwex888/miyin/commit/38fb7729513c555bdf17beec0851a69a393b776e) feat(album): 添加专辑下载按文件夹归档功能 _(qwex888)_
-- [`95f0bcf`](https://github.com/qwex888/miyin/commit/95f0bcf0005ee6973bfa0d914092431db39ac77a) feat(fnpack): 自动下载 fnpack CLI 并更新构建脚本 _(timor-m)_
-- [`03f4095`](https://github.com/qwex888/miyin/commit/03f4095735327ef4b38716b701fdd29d4801298c) feat(search): 增强搜索功能与专辑详情展示 _(qwex888)_
-- [`cba633d`](https://github.com/qwex888/miyin/commit/cba633ddc2026f5ef430f8917c20203372d63c69) fix(ios15): 设置 Vite 构建目标为 safari15 尝试修复 iOS 15 页面空白 _(qwex888)_
-- [`3f9b727`](https://github.com/qwex888/miyin/commit/3f9b7279db0ef3c06af2380b5019b773457f114c) feat(update): 增加音源更新提示与一键更新功能 _(qwex888)_
-- [`1dde218`](https://github.com/qwex888/miyin/commit/1dde2184dce5c4025c9fcd0b7f75f79d3369dbe1) feat: 支持歌单ID直通入队，修复试听与移动端安全区适配 _(qwex888)_
-
-### 合并提交
-
-- [`94a0bf3`](https://github.com/qwex888/miyin/commit/94a0bf34f41ec047ceab21029127193e263270c5) Merge pull request #24 from timor-m/main _(yocat)_
-- [`8c3a5a0`](https://github.com/qwex888/miyin/commit/8c3a5a03e1e9e852375ceae24b8f83806e5d89e0) Merge branch 'main' into main _(yocat)_
+- [`eb9cf96`](https://github.com/qwex888/miyin/commit/eb9cf96e4f363183bb9e86303afe7a4329a1af5b) test(flacCover): 自动剥离测试样本的原有封面 _(qwex888)_
+- [`cb6fe1f`](https://github.com/qwex888/miyin/commit/cb6fe1fba1e71b8094ad6909d1fe56eaa8249f06) build(package.json): 将版本从0.5.0恢复至0.5.1 _(qwex888)_
+- [`c30d517`](https://github.com/qwex888/miyin/commit/c30d517d6abc2e8039f30ffd61644f3ce8e9e9ff) feat(download): 新增单曲搜索批量多选下载，修复多项核心问题 _(qwex888)_
+- [`fa50d80`](https://github.com/qwex888/miyin/commit/fa50d801a467b9c924a64bdb001d1dc6602eedc4) fix(metadata): 修复专辑封面嵌入失败的问题 _(qwex888)_
+- [`b80ea96`](https://github.com/qwex888/miyin/commit/b80ea96692b8269b906507a800830060cbd251eb) fix: 修复更新提醒异常、补全音乐封面并优化更新流程 _(qwex888)_
