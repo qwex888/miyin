@@ -36,4 +36,12 @@ describe('runtimeEnv', () => {
   it('falls back session secret when unset', () => {
     expect(getSessionSecret().length).toBeGreaterThan(0)
   })
+
+  it('generates unpredictable random session secret when unset (no hardcoded fallback)', () => {
+    const secret = getSessionSecret()
+    expect(secret).not.toBe('dev-change-me')
+    // 进程内稳定：同一进程多次取值一致，保证会话可校验
+    expect(getSessionSecret()).toBe(secret)
+    expect(secret.length).toBeGreaterThanOrEqual(64)
+  })
 })

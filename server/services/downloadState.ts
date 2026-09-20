@@ -1,5 +1,12 @@
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
+/** 全部合法音质档位（入队/重试/换音质共用） */
+export const ALLOWED_QUALITIES: readonly string[] = ['highest', 'flac24bit', 'flac', '320k', '128k']
+
+export function isAllowedQuality(quality: string | null | undefined): boolean {
+  return !!quality && ALLOWED_QUALITIES.includes(quality)
+}
+
 /** 可自动重试的错误（不做断点续传，整文件重下） */
 export function isRetryableError(err: unknown): boolean {
   const msg = String((err as any)?.message || err || '').toLowerCase()

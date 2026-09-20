@@ -37,7 +37,7 @@ import {
   previewUrlError,
   probeAudioDurationSeconds,
 } from '../utils/audioPreview'
-import { nextStatusAfterFailure, isRetryableError } from './downloadState'
+import { nextStatusAfterFailure, isRetryableError, isAllowedQuality } from './downloadState'
 import { msUntilCanStartTask } from '../utils/downloadIntervals'
 export type { TaskStatus } from './downloadState'
 export { nextStatusAfterFailure, isRetryableError } from './downloadState'
@@ -374,6 +374,9 @@ export type EnqueueDownloadInput = {
 }
 
 export function enqueueDownload(input: EnqueueDownloadInput) {
+  if (input.quality != null && input.quality !== '' && !isAllowedQuality(input.quality)) {
+    throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${input.quality}` })
+  }
   const settings = getSettings()
   assertDownloadDirWritable(settings.downloadDir)
 
@@ -455,6 +458,13 @@ export function batchEnqueueDownload(
 
   const runInsertTransaction = db.transaction((taskList: EnqueueDownloadInput[]) => {
     for (const item of taskList) {
+      if (item.quality != null && item.quality !== '' && !isAllowedQuality(item.quality)) {
+        itemResults.push({
+          ok: false,
+          error: `不支持的音质: ${item.quality}`,
+        })
+        continue
+      }
       const sourceId = item.sourceId || getSourceForPlatform(item.platform)
       if (!sourceId) {
         itemResults.push({
@@ -615,11 +625,8 @@ export function retryTask(id: string, opts?: { resetAttempts?: boolean; quality?
   assertDownloadDirWritable(settings.downloadDir)
 
   const quality = opts?.quality?.trim()
-  if (quality) {
-    const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
-    if (!allowed.has(quality)) {
-      throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
-    }
+  if (quality && !isAllowedQuality(quality)) {
+    throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
   }
 
   getDb()
@@ -642,8 +649,7 @@ export function switchQualityAndRetry(id: string, quality: string) {
   if (task.status === 'running' || task.status === 'queued') {
     throw createError({ statusCode: 400, statusMessage: '任务进行中，请先取消再换音质' })
   }
-  const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
-  if (!allowed.has(quality)) {
+  if (!isAllowedQuality(quality)) {
     throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
   }
 
@@ -703,8 +709,7 @@ export function batchSwitchQualityAndRetry(
   quality: string,
   opts?: { tab?: 'failed' },
 ) {
-  const allowed = new Set(['highest', 'flac24bit', 'flac', '320k', '128k'])
-  if (!allowed.has(quality)) {
+  if (!isAllowedQuality(quality)) {
     throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
   }
   const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab)
@@ -816,13 +821,23 @@ export function batchSwitchSourceAndRetry(
 const lastEmitTimeByTaskId = new Map<string, number>()
 const lastEmitProgressByTaskId = new Map<string, number>()
 
-function updateTask(id: string, patch: Partial<DownloadTaskRow>, opts?: { throttleProgress?: boolean }) {
+function updateTask(
+  id: string,
+  patch: Partial<DownloadTaskRow>,
+  opts?: { throttleProgress?: boolean; whereStatus?: string[] },
+) {
   const keys = Object.keys(patch)
-  if (!keys.length) return
+  if (!keys.length) return 0
   const sets = keys.map((k) => `${k} = ?`).join(', ')
-  getDb()
-    .prepare(`UPDATE download_tasks SET ${sets}, updated_at = ? WHERE id = ?`)
-    .run(...keys.map((k) => (patch as Record<string, unknown>)[k]), nowIso(), id)
+  let sql = `UPDATE download_tasks SET ${sets}, updated_at = ? WHERE id = ?`
+  const runArgs: unknown[] = [...keys.map((k) => (patch as Record<string, unknown>)[k]), nowIso(), id]
+  if (opts?.whereStatus?.length) {
+    sql += ` AND status IN (${opts.whereStatus.map(() => '?').join(',')})`
+    runArgs.push(...opts.whereStatus)
+  }
+  const info = getDb().prepare(sql).run(...runArgs)
+  // CAS 未命中（如任务已被取消/删除）：不广播事件，避免复活脏数据
+  if (info.changes === 0) return 0
 
   if (opts?.throttleProgress && patch.progress != null) {
     const now = Date.now()
@@ -830,7 +845,7 @@ function updateTask(id: string, patch: Partial<DownloadTaskRow>, opts?: { thrott
     const lastProg = lastEmitProgressByTaskId.get(id) ?? -1
     const progDiff = Math.abs(patch.progress - lastProg)
     if (now - lastTime < 250 && progDiff < 0.05 && patch.progress < 0.99) {
-      return
+      return info.changes
     }
     lastEmitTimeByTaskId.set(id, now)
     lastEmitProgressByTaskId.set(id, patch.progress)
@@ -839,6 +854,19 @@ function updateTask(id: string, patch: Partial<DownloadTaskRow>, opts?: { thrott
     lastEmitProgressByTaskId.delete(id)
   }
   emitTask(id)
+  return info.changes
+}
+
+/**
+ * 状态迁移原语（CAS）：仅当任务当前状态 ∈ fromStatuses 时应用 patch。
+ * 保证 cancelled 为终结态 —— worker 侧任何状态回写都不得复活已取消任务。
+ */
+export function applyStatusTransition(
+  id: string,
+  patch: Partial<DownloadTaskRow>,
+  fromStatuses: string[],
+): boolean {
+  return updateTask(id, patch, { whereStatus: fromStatuses }) > 0
 }
 export function ensureDiskWritable(dir: string) {
   return assertDownloadDirWritable(dir)
@@ -926,7 +954,9 @@ async function processTask(task: DownloadTaskRow) {
     if (!current || current.status === 'cancelled' || abortController.signal.aborted) {
       return
     }
-    updateTask(task.id, { status: 'running', progress: 0.01, error: null })
+    // CAS：仅 queued → running。若已被取消（CAS 失败）则直接退出，不复活任务
+    const started = applyStatusTransition(task.id, { status: 'running', progress: 0.01, error: null }, ['queued'])
+    if (!started) return
     ensureDownloadDirWritable(settings.downloadDir)
     const musicInfo = JSON.parse(task.music_info_json || '{}') as Record<string, unknown>
     const { url, quality } = await resolveUrl(task, task.quality || settings.defaultQuality)
@@ -1047,15 +1077,24 @@ async function processTask(task: DownloadTaskRow) {
       throw new Error('cancelled')
     }
 
-    updateTask(task.id, {
-      status: 'completed',
-      progress: 1,
-      file_path: filePath,
-      lyric_path: lyricPath,
-      quality,
-      file_size: fileSize,
-      error: null,
-    })
+    // CAS：仅 running → completed。未命中说明任务已被取消，清理本地文件并保留取消态
+    const completed = applyStatusTransition(
+      task.id,
+      {
+        status: 'completed',
+        progress: 1,
+        file_path: filePath,
+        lyric_path: lyricPath,
+        quality,
+        file_size: fileSize,
+        error: null,
+      },
+      ['running'],
+    )
+    if (!completed) {
+      removeFileQuiet(filePath)
+      removeFileQuiet(lyricPath)
+    }
   } catch (err: unknown) {
     const e = err as { message?: string; code?: string; name?: string }
     let msg = e?.message || String(err)
@@ -1066,13 +1105,17 @@ async function processTask(task: DownloadTaskRow) {
     removeFileQuiet(filePath)
     removeFileQuiet(lyricPath)
     if (msg === 'cancelled' || abortController.signal.aborted || e?.name === 'AbortError') {
-      updateTask(task.id, {
-        status: 'cancelled',
-        error: '用户取消',
-        file_path: null,
-        lyric_path: null,
-        file_size: null,
-      })
+      applyStatusTransition(
+        task.id,
+        {
+          status: 'cancelled',
+          error: '用户取消',
+          file_path: null,
+          lyric_path: null,
+          file_size: null,
+        },
+        ['queued', 'running'],
+      )
       return
     }
     const attempts = (task.attempts || 0) + 1
@@ -1102,27 +1145,35 @@ async function processTask(task: DownloadTaskRow) {
     })
     if (nextStatus === 'queued') {
       const next = alts.length ? alts[(attempts - 1) % alts.length] : null
-      updateTask(task.id, {
-        status: 'queued',
-        attempts,
-        source_id: next?.id || task.source_id,
-        error: `失败重试(${attempts}/${settings2.maxAttempts}): ${msg}`,
-        progress: 0,
-        file_path: null,
-        lyric_path: null,
-        file_size: null,
-      })
+      applyStatusTransition(
+        task.id,
+        {
+          status: 'queued',
+          attempts,
+          source_id: next?.id || task.source_id,
+          error: `失败重试(${attempts}/${settings2.maxAttempts}): ${msg}`,
+          progress: 0,
+          file_path: null,
+          lyric_path: null,
+          file_size: null,
+        },
+        ['running'],
+      )
       setTimeout(() => kickWorker(), 500)
     } else {
-      updateTask(task.id, {
-        status: 'failed',
-        attempts,
-        error: msg,
-        progress: 0,
-        file_path: null,
-        lyric_path: null,
-        file_size: null,
-      })
+      applyStatusTransition(
+        task.id,
+        {
+          status: 'failed',
+          attempts,
+          error: msg,
+          progress: 0,
+          file_path: null,
+          lyric_path: null,
+          file_size: null,
+        },
+        ['running'],
+      )
     }
   } finally {
     inFlightQueueTaskIds.delete(task.id)

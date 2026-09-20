@@ -32,11 +32,20 @@ function norm(s: string) {
 
 function scoreMeta(track: MatchInput, cand: MatchCandidate) {
   let score = 0
-  if (norm(track.title) && norm(track.title) === norm(cand.title)) score += 0.55
-  else if (norm(cand.title).includes(norm(track.title)) || norm(track.title).includes(norm(cand.title))) score += 0.35
+  // 双方 norm 后非空才参与比较，避免空串 includes('') 恒真导致全括号标题/歌手得高分
+  const tTitle = norm(track.title)
+  const cTitle = norm(cand.title)
+  if (tTitle && cTitle) {
+    if (tTitle === cTitle) score += 0.55
+    else if (cTitle.includes(tTitle) || tTitle.includes(cTitle)) score += 0.35
+  }
 
-  if (norm(track.artist) && norm(cand.artist).includes(norm(track.artist.split(/[\/,&]/)[0] || ''))) score += 0.3
-  if (track.album && cand.album && norm(track.album) === norm(cand.album)) score += 0.1
+  const tArtist = norm(track.artist.split(/[\/,&]/)[0] || '')
+  const cArtist = norm(cand.artist)
+  if (tArtist && cArtist && cArtist.includes(tArtist)) score += 0.3
+  const tAlbum = norm(track.album || '')
+  const cAlbum = norm(cand.album || '')
+  if (tAlbum && cAlbum && tAlbum === cAlbum) score += 0.1
   if (track.duration && cand.duration && Math.abs(track.duration - cand.duration) <= 3) score += 0.05
   return Math.min(1, score)
 }

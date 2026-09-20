@@ -9,20 +9,7 @@ import { searchPageHasMore } from '#shared/searchPagination'
 import type { EnqueueResultPayload } from '~/components/EnqueueResultDialog.vue'
 import type { AlbumDetailData } from '~/components/AlbumDetailPanel.vue'
 import type { SearchAlbumItem } from '~/components/AlbumResultList.vue'
-
-type Track = {
-  id: string
-  externalId: string
-  title: string
-  artist: string
-  album: string
-  albumId?: string
-  duration: number
-  platform: string
-  cover?: string
-  qualitys: string[]
-  musicInfo: Record<string, any>
-}
+import type { SearchTrack } from '~/components/SongResultList.vue'
 
 type PlatformTab = {
   id: string
@@ -38,9 +25,9 @@ const platform = ref('wy')
 const platforms = ref<PlatformTab[]>(
   SEARCH_PLATFORM_ORDER.map((id) => ({ id, label: platformLabel(id), sourceCount: 0 })),
 )
-const items = ref<Track[]>([])
+const items = ref<SearchTrack[]>([])
 const albumItems = ref<SearchAlbumItem[]>([])
-const selected = ref<Track | null>(null)
+const selected = ref<SearchTrack | null>(null)
 const selectedAlbum = ref<SearchAlbumItem | null>(null)
 const albumDetail = ref<AlbumDetailData | null>(null)
 const loading = ref(false)
@@ -50,6 +37,8 @@ const currentPage = ref(1)
 const hasMore = ref(false)
 /** 递增以作废过期的搜索 / 加载更多响应 */
 let searchGen = 0
+/** 递增以重建单曲列表组件：切换平台 / 重新搜索时清空已勾选项 */
+const songListKey = ref(0)
 const quality = ref<DownloadQuality>('highest')
 const withLyric = ref(true)
 const lyricMode = ref<'external' | 'embedded'>('external')
@@ -68,6 +57,10 @@ const previewBusy = computed(
 )
 const enqueueResult = ref<EnqueueResultPayload | null>(null)
 const showEnqueueResult = ref(false)
+/** 本次入队来源：决定结果弹窗「重试失败」走哪条重试路径 */
+const enqueueOrigin = ref<'album' | 'song'>('album')
+/** 上一次单曲批量提交的曲目，用于按 results 下标重试失败项 */
+const lastSongBatch = ref<SearchTrack[]>([])
 const {
   showHomeBanner,
   refresh: refreshFnOsAuth,
@@ -93,7 +86,7 @@ function ensureAlbumPlatform() {
   }
 }
 
-function selectTrack(t: Track) {
+function selectTrack(t: SearchTrack) {
   selected.value = t
   if (import.meta.client && window.matchMedia('(max-width: 768px)').matches) {
     detailSheetOpen.value = true
@@ -201,12 +194,13 @@ async function doSearch() {
   const gen = ++searchGen
   resetAlbumView()
   resetSearchPaging()
+  songListKey.value++
   loadingText.value = '搜索中…'
   loading.value = true
   try {
     const res = await $fetch<{
       type: 'song' | 'album'
-      items: Track[] | SearchAlbumItem[]
+      items: SearchTrack[] | SearchAlbumItem[]
       platforms: PlatformTab[]
       sourceHint: string[]
     }>('/api/search', {
@@ -235,7 +229,7 @@ async function doSearch() {
         toast.info('未找到相关专辑')
       }
     } else {
-      items.value = pageItems as Track[]
+      items.value = pageItems as SearchTrack[]
       albumItems.value = []
       selectedAlbum.value = null
       selected.value = items.value[0] || null
@@ -267,7 +261,7 @@ async function loadMore() {
   try {
     const res = await $fetch<{
       type: 'song' | 'album'
-      items: Track[] | SearchAlbumItem[]
+      items: SearchTrack[] | SearchAlbumItem[]
     }>('/api/search', {
       method: 'POST',
       body: {
@@ -285,7 +279,7 @@ async function loadMore() {
       albumItems.value = albumItems.value.concat(unique)
     } else {
       const existing = new Set(items.value.map((t) => t.id))
-      const unique = (pageItems as Track[]).filter((t) => !existing.has(t.id))
+      const unique = (pageItems as SearchTrack[]).filter((t) => !existing.has(t.id))
       items.value = items.value.concat(unique)
     }
     currentPage.value = nextPage
@@ -342,7 +336,7 @@ async function openAlbumDetail(album: SearchAlbumItem) {
   }
 }
 
-async function openAlbumFromTrack(t: Track) {
+async function openAlbumFromTrack(t: SearchTrack) {
   if (!t.albumId) {
     toast.info('该曲目未携带专辑 ID，无法跳转整专')
     return
@@ -481,6 +475,7 @@ async function enqueueAlbumTracks(indices: number[]) {
       },
     })
     enqueueResult.value = res
+    enqueueOrigin.value = 'album'
     showEnqueueResult.value = true
     useDownloadBadge().notifyChanged()
   } catch (e: unknown) {
@@ -491,16 +486,73 @@ async function enqueueAlbumTracks(indices: number[]) {
   }
 }
 
-function fmtDur(sec: number) {
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return `${m}:${String(s).padStart(2, '0')}`
+/**
+ * 单曲搜索结果批量入队：曲目自带 musicInfo，服务端直通匹配（不再逐首搜索）。
+ * 不传 albumDownloadToFolder，因此不会按专辑建文件夹。
+ */
+async function enqueueSelectedSongs(tracks: SearchTrack[]) {
+  if (!tracks.length || downloading.value) return
+  downloading.value = true
+  loadingText.value = '入队中…'
+  loading.value = true
+  try {
+    const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
+      method: 'POST',
+      body: {
+        title: '批量下载',
+        platform: platform.value,
+        url: '',
+        tracks: tracks.map((t) => ({
+          externalId: t.externalId,
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          duration: t.duration,
+          platform: t.platform,
+          musicInfo: t.musicInfo,
+          matchMethod: 'id',
+        })),
+        downloadLyric: withLyric.value,
+        lyricMode: lyricMode.value,
+        quality: quality.value,
+      },
+    })
+    lastSongBatch.value = tracks
+    enqueueOrigin.value = 'song'
+    enqueueResult.value = res
+    showEnqueueResult.value = true
+    useDownloadBadge().notifyChanged()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '入队失败'))
+  } finally {
+    downloading.value = false
+    loading.value = false
+  }
 }
 
 async function retryFailedEnqueue() {
-  if (!enqueueResult.value?.results?.length || !albumDetail.value) return
+  const results = enqueueResult.value?.results
+  if (!results?.length) return
+
+  if (enqueueOrigin.value === 'song') {
+    // 服务端按提交顺序填充 results，故失败项下标即提交数组下标
+    const failedIndices = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0)
+    const tracks = failedIndices
+      .map((i) => lastSongBatch.value[i])
+      .filter((t): t is SearchTrack => Boolean(t))
+    if (!tracks.length) {
+      toast.info('没有可重试的失败项')
+      return
+    }
+    showEnqueueResult.value = false
+    await enqueueSelectedSongs(tracks)
+    return
+  }
+
+  // 专辑：保持原有按曲名匹配的重试行为
+  if (!albumDetail.value) return
   const failedTitles = new Set(
-    enqueueResult.value.results.filter((r) => !r.ok).map((r) => r.title),
+    results.filter((r) => !r.ok).map((r) => r.title),
   )
   const indices = albumDetail.value.tracks
     .map((t, i) => (failedTitles.has(t.title) ? i : -1))
@@ -605,33 +657,17 @@ async function retryFailedEnqueue() {
     <div v-else class="split">
       <div class="card list">
         <template v-if="searchType === 'song'">
-          <VirtualList
-            v-if="items.length"
-            :key="`song-${platform}`"
+          <SongResultList
+            :key="`song-${platform}-${songListKey}`"
             :items="items"
-            :estimate-size="64"
+            :selected-id="selected?.id"
             :has-more="hasMore"
-            :loading="loadingMore || loading"
-            fill
+            :loading-more="loadingMore || loading"
+            :enqueueing="downloading"
+            @select="selectTrack"
+            @enqueue="enqueueSelectedSongs"
             @load-more="loadMore"
-          >
-            <template #default="{ item }">
-              <div
-                class="row"
-                :class="{ active: selected?.id === item.id }"
-                @click="selectTrack(item)"
-              >
-                <CoverImage :src="item.cover" class="cover" :alt="item.title" />
-                <div class="meta">
-                  <div class="title">{{ item.title }}</div>
-                  <div class="muted">{{ item.artist }} · {{ fmtDur(item.duration) }}</div>
-                </div>
-              </div>
-            </template>
-          </VirtualList>
-          <p v-else class="muted empty">暂无结果，输入关键词搜索</p>
-          <p v-if="loadingMore" class="muted list-footer">加载中…</p>
-          <p v-else-if="items.length && !hasMore" class="muted list-footer">没有更多了</p>
+          />
         </template>
         <template v-else>
           <AlbumResultList
@@ -919,44 +955,18 @@ async function retryFailedEnqueue() {
   flex-direction: column;
   -webkit-overflow-scrolling: touch;
 }
-.list-footer {
-  flex-shrink: 0;
-  padding: 8px;
-  text-align: center;
-  font-size: 12px;
-}
-.row {
-  display: flex;
-  gap: 10px;
-  padding: 8px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.row:hover,
-.row.active {
-  background: var(--accent-soft);
-  border-left: 3px solid var(--accent);
-}
-.cover,
 .detail-cover {
-  width: 48px;
-  height: 48px;
+  width: 100%;
+  height: 180px;
+  margin-bottom: 8px;
   border-radius: 6px;
   flex-shrink: 0;
   overflow: hidden;
   background: var(--accent-soft);
 }
-.detail-cover {
-  width: 100%;
-  height: 180px;
-  margin-bottom: 8px;
-}
 .detail {
   min-height: 0;
   overflow: auto;
-}
-.title {
-  font-weight: 600;
 }
 .detail h2 {
   margin: 0 0 4px;
@@ -984,10 +994,6 @@ async function retryFailedEnqueue() {
   font-size: 13px;
   margin: 0 0 8px;
   flex-shrink: 0;
-}
-.empty {
-  padding: 24px;
-  text-align: center;
 }
 .detail-sheet-overlay {
   position: fixed;

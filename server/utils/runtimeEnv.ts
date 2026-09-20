@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto'
+
 /**
  * 运行时环境读取：优先 process.env（飞牛 cmd/main、Docker 常用 AUTH_TOKEN 等），
  * 再回退 Nuxt runtimeConfig（需 NUXT_* 才能在运行时覆盖）。
@@ -35,11 +37,19 @@ export function getAuthToken(): string {
   return getAuthTokenFromEnv()
 }
 
+/** 未配置 SESSION_SECRET 时的进程内随机密钥（重启后生成新值，旧会话失效需重新登录） */
+let generatedSessionSecret: string | null = null
+
 export function getSessionSecret(): string {
   const fromEnv = firstDefinedString(process.env.SESSION_SECRET, process.env.NUXT_SESSION_SECRET)
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv
   const fromCfg = String(runtimeConfigSafe().sessionSecret ?? '')
-  return fromCfg || 'dev-change-me'
+  if (fromCfg) return fromCfg
+  // 安全兜底：绝不能回退到可预测的固定值，否则开启口令鉴权时可被伪造会话
+  if (!generatedSessionSecret) {
+    generatedSessionSecret = randomBytes(32).toString('hex')
+  }
+  return generatedSessionSecret
 }
 
 export function getDataDirEnv(): string {

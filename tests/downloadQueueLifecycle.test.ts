@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { closeDb, getDb } from '../server/utils/db'
 import {
   enqueueDownload,
+  batchEnqueueDownload,
   getTask,
   cancelTask,
   listTasks,
@@ -97,5 +98,56 @@ describe('downloadQueue concurrency and lifecycle', () => {
     expect(queued[0]?.title).toBe('歌曲2')
     expect(cancelled.length).toBe(1)
     expect(cancelled[0]?.title).toBe('歌曲1')
+  })
+
+  it('rejects invalid quality on single enqueue with 400 (BUG-05)', () => {
+    expect(() =>
+      enqueueDownload({
+        title: '晴天',
+        artist: '周杰伦',
+        platform: 'wy',
+        quality: 'flac999',
+        musicInfo: { songmid: '1' },
+      }),
+    ).toThrowError(/不支持的音质: flac999/)
+
+    // 合法音质不受影响
+    const ok = enqueueDownload({
+      title: '晴天',
+      artist: '周杰伦',
+      platform: 'wy',
+      quality: 'flac',
+      musicInfo: { songmid: '2' },
+    })
+    expect(ok.quality).toBe('flac')
+  })
+
+  it('marks per-item error for invalid quality in batch enqueue (BUG-05)', () => {
+    const res = batchEnqueueDownload([
+      {
+        title: '好歌',
+        artist: '歌手',
+        platform: 'wy',
+        quality: '999k',
+        musicInfo: { songmid: '1' },
+      },
+      {
+        title: '正常歌',
+        artist: '歌手',
+        platform: 'wy',
+        quality: '320k',
+        musicInfo: { songmid: '2' },
+      },
+    ])
+    expect(res.total).toBe(2)
+    expect(res.enqueued).toBe(1)
+    expect(res.results[0]?.ok).toBe(false)
+    expect(res.results[0]?.error).toContain('不支持的音质: 999k')
+    expect(res.results[1]?.ok).toBe(true)
+
+    // 非法音质项不得入库（确定性断言：worker 会异步流转状态，故不按状态过滤）
+    const all = listTasks()
+    expect(all.find((t) => t.title === '好歌')).toBeUndefined()
+    expect(all.find((t) => t.title === '正常歌')).toBeDefined()
   })
 })
