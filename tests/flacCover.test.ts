@@ -1,28 +1,50 @@
 import { describe, it, expect } from 'vitest'
-import { copyFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { copyFileSync, readFileSync, existsSync, mkdtempSync, rmSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { writeAudioMetadata, flacHasPictureBlock } from '../server/services/metadataService'
 
 /**
- * 必须用不含 PICTURE 的样本；若样本本身已有封面，`-map 0 -c copy` 会保留旧封面，
- * 导致即使封面下载/转换失败也能「通过」。
+ * 样本来自本地 downloads 目录；不要求它恰好无封面——若已含 PICTURE 块，
+ * 测试内先用 ffmpeg 剥离，保证「无封面」前置条件由测试自己构造。
+ * （必须用不含 PICTURE 的样本：若样本本身已有封面，`-map 0 -c copy` 会保留旧封面，
+ * 导致即使封面下载/转换失败也能「通过」。）
  */
-const COVERLESS_SAMPLE = '/Users/huangdongliang/code/miyin/downloads/毛不易 - 消愁.flac'
+const SAMPLE = '/Users/huangdongliang/code/miyin/downloads/毛不易 - 消愁.flac'
 const COVER_URL =
   'https://p1.music.126.net/vmCcDvD1H04e9gm97xsCqg==/109951163350929740.jpg'
+
+/** 剥离 FLAC 中已有的封面流（-vn 去视频流，音频 -c copy 不重编码） */
+function stripFlacCover(src: string): string {
+  const out = `${src}.stripped.flac`
+  const r = spawnSync(
+    'ffmpeg',
+    ['-y', '-i', src, '-map', '0:a', '-c:a', 'copy', '-vn', out],
+    { stdio: 'ignore' },
+  )
+  if (r.status !== 0 || !existsSync(out)) {
+    throw new Error('ffmpeg 剥离样本封面失败，无法构造无封面样本')
+  }
+  return out
+}
 
 describe('flac cover embed', () => {
   it(
     'embeds jpeg picture block for coverless flac',
     async () => {
-      if (!existsSync(COVERLESS_SAMPLE)) return
-      expect(flacHasPictureBlock(COVERLESS_SAMPLE)).toBe(false)
+      if (!existsSync(SAMPLE)) return
 
       const dir = mkdtempSync(join(tmpdir(), 'miyin-flac-cover-'))
       const src = join(dir, 'sample.flac')
       try {
-        copyFileSync(COVERLESS_SAMPLE, src)
+        copyFileSync(SAMPLE, src)
+        if (flacHasPictureBlock(src)) {
+          const stripped = stripFlacCover(src)
+          copyFileSync(stripped, src)
+        }
+        expect(flacHasPictureBlock(src)).toBe(false)
+
         const r = await writeAudioMetadata(
           src,
           {
