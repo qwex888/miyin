@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.1"
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {
