@@ -5,7 +5,7 @@ import {
   platformLabel,
   type DownloadQuality,
 } from '~/utils/mediaLabels'
-import { searchPageHasMore } from '#shared/searchPagination'
+import { SEARCH_PAGE_SIZE, searchPageHasMore } from '#shared/searchPagination'
 import { buildDedupKey } from '#shared/trackKey'
 import type { EnqueueResultPayload } from '~/components/EnqueueResultDialog.vue'
 import type { AlbumDetailData } from '~/components/AlbumDetailPanel.vue'
@@ -75,6 +75,32 @@ let previewAbort: AbortController | null = null
 const previewBusy = computed(
   () => previewingTrackId.value !== null && selected.value?.id === previewingTrackId.value,
 )
+
+type AlbumBucket = { albumId: string; album: string; count: number; sample: SearchTrack }
+
+/**
+ * 「搜索结果被单一专辑占据」检测（Issue #40 续）。
+ *
+ * QQ 歌曲搜索索引只覆盖一张专辑的一部分（单 query 上限约 1000 条，且是散落各段），
+ * 靠翻页枚举全集是死路。命中率够高时直接给出整专入口，一步跳到专辑分页（那里能拿全部集数）。
+ */
+const dominantAlbum = computed<AlbumBucket | null>(() => {
+  if (searchType.value !== 'song' || items.value.length < SEARCH_PAGE_SIZE) return null
+  const buckets = new Map<string, AlbumBucket>()
+  for (const t of items.value) {
+    if (!t.albumId) continue
+    const key = `${t.platform}:${t.albumId}`
+    const cur = buckets.get(key)
+    if (cur) cur.count += 1
+    else buckets.set(key, { albumId: t.albumId, album: t.album, count: 1, sample: t })
+  }
+  let best: AlbumBucket | null = null
+  for (const bucket of buckets.values()) {
+    if (!best || bucket.count > best.count) best = bucket
+  }
+  if (!best) return null
+  return best.count / items.value.length >= 0.6 ? best : null
+})
 const enqueueResult = ref<EnqueueResultPayload | null>(null)
 const showEnqueueResult = ref(false)
 /** 本次入队来源：决定结果弹窗「重试失败」走哪条重试路径 */
@@ -368,6 +394,8 @@ async function doSearch() {
       items: SearchTrack[] | SearchAlbumItem[]
       platforms: PlatformTab[]
       sourceHint: string[]
+      hasMore?: boolean
+      filtered?: number
     }>('/api/search', {
       method: 'POST',
       body: {
@@ -381,7 +409,7 @@ async function doSearch() {
     if (res.platforms?.length) platforms.value = res.platforms
     ensureAlbumPlatform()
     const pageItems = res.items || []
-    hasMore.value = searchPageHasMore(pageItems.length)
+    hasMore.value = res.hasMore ?? searchPageHasMore(pageItems.length)
     currentPage.value = 1
     if (searchType.value === 'album') {
       albumItems.value = pageItems as SearchAlbumItem[]
@@ -427,6 +455,8 @@ async function loadMore() {
     const res = await $fetch<{
       type: 'song' | 'album'
       items: SearchTrack[] | SearchAlbumItem[]
+      hasMore?: boolean
+      filtered?: number
     }>('/api/search', {
       method: 'POST',
       body: {
@@ -449,7 +479,13 @@ async function loadMore() {
     }
     currentPage.value = nextPage
     // 空页 / 不满一页停止；不因「未撑满视口」自动连环请求
-    hasMore.value = searchPageHasMore(pageItems.length)
+    hasMore.value = res.hasMore ?? searchPageHasMore(pageItems.length)
+    // 上游把「相关推荐」凑满一页时会被服务端过滤；到末尾时提示一次，引导去专辑看全集
+    if (res.hasMore === false && (res.filtered || 0) > 0) {
+      toast.info(
+        `已达上游可检索结果末尾，已过滤 ${res.filtered} 条不相关推荐；要看完整集数请切到「专辑」搜索`,
+      )
+    }
   } catch (e: unknown) {
     if (gen !== searchGen) return
     hasMore.value = false
@@ -506,6 +542,8 @@ async function openAlbumDetail(album: SearchAlbumItem) {
     albumTotal.value = res.total ?? null
     // H5：全屏详情；PC：留在分栏，右侧直接展示曲目
     view.value = isMobileViewport() ? 'albumDetail' : 'results'
+    // 首屏之后**在后台把剩余集数补齐**：用户不该为了「知道专辑不完整」而去数条数
+    if (res.hasMore) void startAlbumFill()
   } catch (e: unknown) {
     if (gen !== albumGen) return
     toast.error(apiErrorMessage(e, '加载专辑失败'))
@@ -518,12 +556,15 @@ async function openAlbumDetail(album: SearchAlbumItem) {
   }
 }
 
-/** 触底 / 手动「加载更多」：只追加一页，不重拉已加载部分 */
-async function loadMoreAlbumTracks() {
+/**
+ * 触底 / 手动「加载更多」：只追加一页，不重拉已加载部分。
+ * `silent` 用于后台补齐剩余页 —— 失败不弹错，保留已加载内容即可。
+ */
+async function loadMoreAlbumTracks(silent = false) {
   const detail = albumDetail.value
   const album = selectedAlbum.value
-  if (!detail || !album) return
-  if (albumLoadingMore.value || !albumHasMore.value) return
+  if (!detail || !album) return false
+  if (albumLoadingMore.value || !albumHasMore.value) return false
   const gen = albumGen
   albumLoadingMore.value = true
   try {
@@ -538,7 +579,7 @@ async function loadMoreAlbumTracks() {
         albumCover: album.cover,
       },
     })
-    if (gen !== albumGen || !albumDetail.value) return
+    if (gen !== albumGen || !albumDetail.value) return false
     const seen = new Set(albumDetail.value.tracks.map((t) => `${t.platform}:${t.externalId}`))
     const fresh = res.tracks.filter((t) => !seen.has(`${t.platform}:${t.externalId}`))
     // 就地追加：保持 detail 引用不变，避免子组件 watch 重置用户已勾选状态
@@ -548,13 +589,60 @@ async function loadMoreAlbumTracks() {
     albumHasMore.value = res.hasMore
     if (res.total != null) albumTotal.value = res.total
     void refreshAlbumLibraryKeys()
+    return fresh.length > 0
   } catch (e: unknown) {
-    if (gen !== albumGen) return
+    if (gen !== albumGen) return false
     albumHasMore.value = false
-    toast.error(apiErrorMessage(e, '加载更多曲目失败'))
+    if (!silent) toast.error(apiErrorMessage(e, '加载更多曲目失败'))
+    return false
   } finally {
     if (gen === albumGen) albumLoadingMore.value = false
   }
+}
+
+/**
+ * 后台补齐剩余集数（打开专辑后自动执行）。
+ *
+ * 动机：专辑只加载首页时，用户看到「已加载 500 / 500」很容易以为这就是全部，
+ * 结果「全选 + 下载」只下到一部分。这里串行把剩余页拉完，让列表与计数都是真实全集。
+ * 失败/切换专辑即停，已加载内容保留。
+ */
+let albumFillPromise: Promise<void> | null = null
+
+async function fillAlbumRemaining() {
+  const gen = albumGen
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // 连续无进展的次数上限：避免空页 / 全重复页把循环卡死
+  let stalled = 0
+  while (albumDetail.value && albumHasMore.value && gen === albumGen) {
+    // 用户手动点了「加载更多」→ 等这一发完成，不要因此退出补齐
+    if (albumLoadingMore.value) {
+      await sleep(150)
+      continue
+    }
+    const added = await loadMoreAlbumTracks(true)
+    if (added) {
+      stalled = 0
+      continue
+    }
+    if (!albumHasMore.value || gen !== albumGen) return
+    if (++stalled >= 3) return
+    await sleep(200)
+  }
+}
+
+function startAlbumFill(): Promise<void> {
+  if (albumFillPromise) return albumFillPromise
+  albumFillPromise = fillAlbumRemaining().finally(() => {
+    albumFillPromise = null
+  })
+  return albumFillPromise
+}
+
+/** 批量动作前确保「已加载」= 「全部」；无更多页时立即返回 */
+async function ensureAlbumFilled() {
+  if (!albumHasMore.value) return
+  await startAlbumFill()
 }
 
 async function openAlbumFromTrack(t: SearchTrack) {
@@ -673,6 +761,12 @@ async function download() {
 
 async function enqueueAlbumTracks(indices: number[]) {
   if (!albumDetail.value || !indices.length || downloading.value) return
+  const loaded = albumDetail.value.tracks.length
+  // 「全选」等价于「整专」：统一走服务端流式，既不受已加载集数限制，也避免提交数千条的巨型请求体
+  if (loaded > 0 && indices.length >= loaded) {
+    await enqueueWholeAlbum()
+    return
+  }
   const tracks = indices
     .map((i) => albumDetail.value!.tracks[i])
     .filter(Boolean)
@@ -976,6 +1070,18 @@ async function retryFailedEnqueue() {
     <div v-else class="split">
       <div class="card list">
         <template v-if="searchType === 'song'">
+          <div v-if="dominantAlbum" class="album-hint">
+            <div class="album-hint-text">
+              <strong>{{ dominantAlbum.album || '同一专辑' }}</strong>
+              <span class="muted">
+                当前 {{ items.length }} 条结果中有 {{ dominantAlbum.count }} 条来自这张专辑；上游搜索最多只覆盖约
+                1000 条，全部集数请直接打开专辑。
+              </span>
+            </div>
+            <button class="btn btn-ghost" type="button" @click="openAlbumFromTrack(dominantAlbum.sample)">
+              打开专辑
+            </button>
+          </div>
           <SongResultList
             :key="`song-${platform}-${songListKey}`"
             :items="items"
@@ -1280,6 +1386,33 @@ async function retryFailedEnqueue() {
   display: flex;
   flex-direction: column;
   -webkit-overflow-scrolling: touch;
+}
+.album-hint {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
+}
+.album-hint-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.album-hint-text strong {
+  font-size: 13px;
+  word-break: break-word;
+}
+.album-hint .btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 8px;
 }
 .detail-cover {
   width: 100%;

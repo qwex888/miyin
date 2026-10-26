@@ -148,10 +148,11 @@ function enqueueAll() {
 }
 
 const loadedText = computed(() => {
-  if (props.totalCount && props.totalCount > 0) {
-    return `已加载 ${props.detail.tracks.length} / 共 ${props.totalCount} 集`
-  }
-  return `已加载 ${props.detail.tracks.length} 集`
+  const base =
+    props.totalCount && props.totalCount > 0
+      ? `已加载 ${props.detail.tracks.length} / 共 ${props.totalCount} 集`
+      : `已加载 ${props.detail.tracks.length} 集`
+  return props.loadingMore ? `${base}（补齐中…）` : base
 })
 </script>
 
@@ -225,10 +226,23 @@ const loadedText = computed(() => {
     </div>
 
     <div class="toolbar">
-      <label class="check">
-        <input type="checkbox" :checked="allSelected" @change="toggleAll" />
-        全选（已选 {{ selected.size }} / 已加载 {{ detail.tracks.length }}）
-      </label>
+      <div class="toolbar-left">
+        <label class="check">
+          <input type="checkbox" :checked="allSelected" @change="toggleAll" />
+          全选（已选 {{ selected.size }} / 已加载 {{ detail.tracks.length }}）
+        </label>
+        <!-- 底部「加载更多」在长列表里会被滚出视野，这里给一个常驻入口 -->
+        <button
+          v-if="hasMore || loadingMore"
+          class="more-link"
+          type="button"
+          :disabled="loadingMore"
+          @click="emit('loadMore')"
+        >
+          {{ loadingMore ? '补齐中…' : '加载更多' }}
+        </button>
+        <span v-else-if="detail.tracks.length >= 30" class="muted more-done">已全部加载</span>
+      </div>
       <div class="toolbar-actions">
         <button class="btn btn-ghost" type="button" :disabled="!selected.size || loading" @click="enqueueSelected">
           下载选中
@@ -274,7 +288,7 @@ const loadedText = computed(() => {
     <div v-if="hasMore || loadingMore" class="more-bar">
       <span class="muted">{{ loadedText }}</span>
       <button class="btn btn-ghost" type="button" :disabled="loadingMore" @click="emit('loadMore')">
-        {{ loadingMore ? '加载中…' : '加载更多' }}
+        {{ loadingMore ? '补齐中…' : '加载更多' }}
       </button>
     </div>
   </div>
@@ -360,6 +374,39 @@ const loadedText = computed(() => {
   gap: 8px;
   margin-bottom: 8px;
   flex-shrink: 0;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/* 「加载更多」文字按钮：常驻工具栏，不随长列表滚出视野 */
+.more-link {
+  flex-shrink: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+}
+.more-link:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.more-link:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+.more-done {
+  flex-shrink: 0;
+  font-size: 12px;
 }
 .toolbar-actions {
   display: flex;
