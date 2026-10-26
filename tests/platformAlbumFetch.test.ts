@@ -23,10 +23,12 @@ if (!globalThis.createError) {
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  ALBUM_SONG_MAX_PAGES,
   ALBUM_SONG_PAGE_SIZE,
+  ALBUM_TRACKS_MAX_ITEMS,
+  ALBUM_TRACKS_PAGE_SIZE,
   clearAlbumCache,
   getAlbumDetail,
+  getAlbumTracksPage,
   listAlbumCapablePlatforms,
   searchAlbums,
 } from '../server/services/platformAlbum'
@@ -236,48 +238,124 @@ describe('platformAlbum fetch adapters (mock fetch)', () => {
     expect(items[0]).toMatchObject({ externalId: '958706', title: '范特西', trackCount: 10 })
   })
 
-  it('getAlbumDetail kg paginates beyond pagesize and merges tracks', async () => {
-    const page1 = Array.from({ length: ALBUM_SONG_PAGE_SIZE }, (_, i) => ({
-      hash: `h${i}`,
-      filename: `歌手 - 曲目${i}`,
-      duration: 180,
-    }))
-    const page2 = [
-      { hash: `h${ALBUM_SONG_PAGE_SIZE}`, filename: `歌手 - 曲目${ALBUM_SONG_PAGE_SIZE}`, duration: 181 },
-      { hash: `h${ALBUM_SONG_PAGE_SIZE + 1}`, filename: `歌手 - 曲目${ALBUM_SONG_PAGE_SIZE + 1}`, duration: 182 },
-    ]
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ data: { total: ALBUM_SONG_PAGE_SIZE + 2, info: page1 } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { total: ALBUM_SONG_PAGE_SIZE + 2, info: page2 } }))
+  it('getAlbumTracksPage kg 按上游真实页大小 100 翻到底（回归 issue #40）', async () => {
+    const pageSize = ALBUM_TRACKS_PAGE_SIZE.kg
+    expect(pageSize).toBe(100)
+    const total = 1100
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      const page = Number(String(url).match(/[?&]page=(\d+)/)?.[1] || 1)
+      const n = Math.max(0, Math.min(pageSize, total - (page - 1) * pageSize))
+      const info = Array.from({ length: n }, (_, i) => ({
+        hash: `p${page}_${i}`,
+        filename: `歌手 - 第${(page - 1) * pageSize + i + 1}集`,
+        duration: 100,
+      }))
+      return jsonResponse({ data: { total, info } })
+    })
 
-    const detail = await getAlbumDetail('kg', '777')
-    expect(detail.album.trackCount).toBe(ALBUM_SONG_PAGE_SIZE + 2)
-    expect(detail.tracks).toHaveLength(ALBUM_SONG_PAGE_SIZE + 2)
-    expect(detail.tracks[0]!.externalId).toBe('h0')
-    expect(detail.tracks.at(-1)!.externalId).toBe(`h${ALBUM_SONG_PAGE_SIZE + 1}`)
-    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(2)
-    expect(String(vi.mocked(globalThis.fetch).mock.calls[0]![0])).toContain('page=1')
-    expect(String(vi.mocked(globalThis.fetch).mock.calls[1]![0])).toContain('page=2')
+    let cursor = 0
+    let loaded = 0
+    let pages = 0
+    let hasMore = true
+    while (hasMore && pages < 30) {
+      const page = await getAlbumTracksPage('kg', 'big', cursor)
+      loaded += page.tracks.length
+      cursor = page.nextCursor
+      hasMore = page.hasMore
+      pages += 1
+    }
+
+    expect(loaded).toBe(total)
+    expect(pages).toBe(11)
+    expect(String(vi.mocked(globalThis.fetch).mock.calls[0]![0])).toContain('pagesize=100')
   })
 
-  it('getAlbumDetail kg stops at ALBUM_SONG_MAX_PAGES hard cap', async () => {
+  it('getAlbumTracksPage tx 用 song_begin 翻页突破单次 1000 上限', async () => {
+    const pageSize = ALBUM_TRACKS_PAGE_SIZE.tx
+    const total = 2637
     globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
-      const m = String(url).match(/[?&]page=(\d+)/)
-      const page = Number(m?.[1] || 1)
-      const songs = Array.from({ length: ALBUM_SONG_PAGE_SIZE }, (_, i) => ({
+      const begin = Number(String(url).match(/[?&]song_begin=(\d+)/)?.[1] || 0)
+      const n = Math.max(0, Math.min(pageSize, total - begin))
+      const list = Array.from({ length: n }, (_, i) => ({
+        songmid: `M${begin + i}`,
+        songname: `第${begin + i + 1}集`,
+        singer: [{ name: '大灰狼' }],
+        interval: 600,
+      }))
+      return jsonResponse({
+        code: 0,
+        // ⚠️ 上游把总数也截断成 1000（实测），不能用它算 hasMore
+        data: { mid: 'A', name: '凡人修仙传', singername: '大灰狼', total_song_num: 1000, list },
+      })
+    })
+
+    let cursor = 0
+    let loaded = 0
+    let pages = 0
+    let hasMore = true
+    let lastTotal: number | undefined
+    while (hasMore && pages < 30) {
+      const page = await getAlbumTracksPage('tx', 'A', cursor)
+      loaded += page.tracks.length
+      cursor = page.nextCursor
+      hasMore = page.hasMore
+      lastTotal = page.total
+      pages += 1
+    }
+
+    expect(loaded).toBe(total)
+    expect(pages).toBe(Math.ceil(total / pageSize))
+    expect(lastTotal).toBe(total)
+    expect(String(vi.mocked(globalThis.fetch).mock.calls[1]![0])).toContain('song_begin=500')
+  })
+
+  it('getAlbumTracksPage tx 越界返回 list: null 时正常收尾', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ code: 0, data: { mid: 'A', name: 'x', total_song_num: 1, list: null } }),
+    )
+    const page = await getAlbumTracksPage('tx', 'A', 1000)
+    expect(page.tracks).toHaveLength(0)
+    expect(page.hasMore).toBe(false)
+  })
+
+  it('getAlbumTracksPage tx 首屏不信任被截断的 total_song_num', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        code: 0,
+        data: {
+          mid: 'A',
+          name: '凡人修仙传',
+          total_song_num: 1000,
+          list: Array.from({ length: ALBUM_TRACKS_PAGE_SIZE.tx }, (_, i) => ({
+            songmid: `M${i}`,
+            songname: `第${i}集`,
+            singer: [{ name: '大灰狼' }],
+            interval: 600,
+          })),
+        },
+      }),
+    )
+    const page = await getAlbumTracksPage('tx', 'A', 0)
+    expect(page.album.trackCount).toBeUndefined()
+    expect(page.hasMore).toBe(true)
+    expect(page.total).toBeUndefined()
+  })
+
+  it('getAlbumDetail kg 在 ALBUM_TRACKS_MAX_ITEMS 处硬顶', async () => {
+    const pageSize = ALBUM_TRACKS_PAGE_SIZE.kg
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      const page = Number(String(url).match(/[?&]page=(\d+)/)?.[1] || 1)
+      const info = Array.from({ length: pageSize }, (_, i) => ({
         hash: `p${page}_${i}`,
         filename: `歌手 - p${page}_${i}`,
         duration: 100,
       }))
-      return jsonResponse({
-        data: { total: ALBUM_SONG_MAX_PAGES * ALBUM_SONG_PAGE_SIZE + 999, info: songs },
-      })
+      return jsonResponse({ data: { total: ALBUM_TRACKS_MAX_ITEMS + 999, info } })
     })
 
     const detail = await getAlbumDetail('kg', 'huge')
-    expect(detail.tracks).toHaveLength(ALBUM_SONG_MAX_PAGES * ALBUM_SONG_PAGE_SIZE)
-    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(ALBUM_SONG_MAX_PAGES)
+    expect(detail.tracks).toHaveLength(ALBUM_TRACKS_MAX_ITEMS)
+    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(ALBUM_TRACKS_MAX_ITEMS / pageSize)
   })
 
   it('getAlbumDetail wraps upstream failure as 502', async () => {

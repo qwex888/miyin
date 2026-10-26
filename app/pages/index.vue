@@ -11,10 +11,18 @@ import type { EnqueueResultPayload } from '~/components/EnqueueResultDialog.vue'
 import type { AlbumDetailData } from '~/components/AlbumDetailPanel.vue'
 import type { SearchAlbumItem } from '~/components/AlbumResultList.vue'
 import type { SearchTrack } from '~/components/SongResultList.vue'
+import { fetchAlbumEnqueueAllNdjson } from '~/utils/fetchPlaylistMatchNdjson'
 import type {
   DuplicateDecision,
   DuplicateReviewItem,
 } from '~/components/DuplicateReviewDialog.vue'
+
+/** `/api/album/detail` 分页响应（Issue #40：详情只加载一页，整专下载另走流式接口） */
+type AlbumPageData = AlbumDetailData & {
+  hasMore: boolean
+  total?: number
+  nextCursor: number
+}
 
 type PlatformTab = {
   id: string
@@ -35,6 +43,13 @@ const albumItems = ref<SearchAlbumItem[]>([])
 const selected = ref<SearchTrack | null>(null)
 const selectedAlbum = ref<SearchAlbumItem | null>(null)
 const albumDetail = ref<AlbumDetailData | null>(null)
+/** 专辑详情分页状态（Issue #40）：只加载已翻到的页，未加载部分交给「整专下载」处理 */
+const albumCursor = ref(0)
+const albumHasMore = ref(false)
+const albumLoadingMore = ref(false)
+const albumTotal = ref<number | null>(null)
+/** 递增以作废过期的专辑分页响应（切专辑 / 换平台 / 重开详情） */
+let albumGen = 0
 const loading = ref(false)
 const loadingMore = ref(false)
 const loadingText = ref('搜索中…')
@@ -326,6 +341,11 @@ function resetAlbumView() {
   view.value = 'results'
   albumDetail.value = null
   selectedAlbum.value = null
+  albumGen++
+  albumCursor.value = 0
+  albumHasMore.value = false
+  albumLoadingMore.value = false
+  albumTotal.value = null
 }
 
 function resetSearchPaging() {
@@ -463,21 +483,77 @@ async function openAlbumDetail(album: SearchAlbumItem) {
     if (isMobileViewport()) view.value = 'albumDetail'
     return
   }
+  const gen = ++albumGen
   loadingText.value = '加载专辑曲目…'
   loading.value = true
+  albumLoadingMore.value = false
   try {
-    const res = await $fetch<AlbumDetailData>('/api/album/detail', {
+    const res = await $fetch<AlbumPageData>('/api/album/detail', {
       method: 'POST',
-      body: { platform: album.platform, albumId: album.externalId },
+      body: {
+        platform: album.platform,
+        albumId: album.externalId,
+        cursor: 0,
+        albumTitle: album.title,
+        albumArtist: album.artist,
+        albumCover: album.cover,
+      },
     })
-    albumDetail.value = res
+    if (gen !== albumGen) return
+    albumDetail.value = { album: res.album, tracks: res.tracks }
+    albumCursor.value = res.nextCursor
+    albumHasMore.value = res.hasMore
+    albumTotal.value = res.total ?? null
     // H5：全屏详情；PC：留在分栏，右侧直接展示曲目
     view.value = isMobileViewport() ? 'albumDetail' : 'results'
   } catch (e: unknown) {
+    if (gen !== albumGen) return
     toast.error(apiErrorMessage(e, '加载专辑失败'))
     albumDetail.value = null
+    albumCursor.value = 0
+    albumHasMore.value = false
+    albumTotal.value = null
   } finally {
-    loading.value = false
+    if (gen === albumGen) loading.value = false
+  }
+}
+
+/** 触底 / 手动「加载更多」：只追加一页，不重拉已加载部分 */
+async function loadMoreAlbumTracks() {
+  const detail = albumDetail.value
+  const album = selectedAlbum.value
+  if (!detail || !album) return
+  if (albumLoadingMore.value || !albumHasMore.value) return
+  const gen = albumGen
+  albumLoadingMore.value = true
+  try {
+    const res = await $fetch<AlbumPageData>('/api/album/detail', {
+      method: 'POST',
+      body: {
+        platform: album.platform,
+        albumId: album.externalId,
+        cursor: albumCursor.value,
+        albumTitle: album.title,
+        albumArtist: album.artist,
+        albumCover: album.cover,
+      },
+    })
+    if (gen !== albumGen || !albumDetail.value) return
+    const seen = new Set(albumDetail.value.tracks.map((t) => `${t.platform}:${t.externalId}`))
+    const fresh = res.tracks.filter((t) => !seen.has(`${t.platform}:${t.externalId}`))
+    // 就地追加：保持 detail 引用不变，避免子组件 watch 重置用户已勾选状态
+    albumDetail.value.tracks.push(...fresh)
+    albumDetail.value.album = res.album
+    albumCursor.value = res.nextCursor
+    albumHasMore.value = res.hasMore
+    if (res.total != null) albumTotal.value = res.total
+    void refreshAlbumLibraryKeys()
+  } catch (e: unknown) {
+    if (gen !== albumGen) return
+    albumHasMore.value = false
+    toast.error(apiErrorMessage(e, '加载更多曲目失败'))
+  } finally {
+    if (gen === albumGen) albumLoadingMore.value = false
   }
 }
 
@@ -648,6 +724,59 @@ async function enqueueAlbumTracks(indices: number[]) {
     void refreshAlbumLibraryKeys()
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '入队失败'))
+  } finally {
+    downloading.value = false
+    loading.value = false
+  }
+}
+
+/**
+ * 整专下载（Issue #40）：不依赖已加载的曲目 —— 服务端按游标自己翻页拉全 + 入队，
+ * 前端只消费 NDJSON 进度。2637 集的专辑也不会撑爆首屏或详情响应。
+ */
+async function enqueueWholeAlbum() {
+  const detail = albumDetail.value
+  const album = selectedAlbum.value
+  if (!detail || !album || downloading.value) return
+  downloading.value = true
+  loading.value = true
+  loadingText.value = '拉取专辑曲目…'
+  try {
+    const res = await fetchAlbumEnqueueAllNdjson(
+      {
+        platform: album.platform,
+        albumId: album.externalId,
+        albumTitle: album.title,
+        albumArtist: album.artist,
+        albumCover: album.cover,
+        quality: quality.value,
+        downloadLyric: withLyric.value,
+        lyricMode: lyricMode.value,
+        albumDownloadToFolder: albumDownloadToFolder.value,
+        albumFolderTemplate: albumFolderTemplate.value.trim() || '{album}',
+      },
+      {
+        onStart: (total, stage) => {
+          if (stage === 'matching') loadingText.value = `入队中…（共 ${total} 集）`
+        },
+        onFetchProgress: (e) => {
+          loadingText.value = e.total
+            ? `拉取专辑曲目 ${e.index}/${e.total}`
+            : `拉取专辑曲目 ${e.index}`
+        },
+        onProgress: (e) => {
+          loadingText.value = `入队中 ${e.index}/${e.total}`
+        },
+      },
+    )
+    enqueueResult.value = res
+    enqueueOrigin.value = 'album'
+    showEnqueueResult.value = true
+    if (!albumTotal.value && res.total) albumTotal.value = res.total
+    useDownloadBadge().notifyChanged()
+    void refreshAlbumLibraryKeys()
+  } catch (e: unknown) {
+    toast.error(apiErrorMessage(e, '整专下载失败'))
   } finally {
     downloading.value = false
     loading.value = false
@@ -828,8 +957,13 @@ async function retryFailedEnqueue() {
         :album-folder-template="albumFolderTemplate"
         :show-back="true"
         :library-keys="albumLibraryKeys"
+        :has-more="albumHasMore"
+        :loading-more="albumLoadingMore"
+        :total-count="albumTotal"
         @back="resetAlbumView"
         @enqueue="enqueueAlbumTracks"
+        @enqueue-all="enqueueWholeAlbum"
+        @load-more="loadMoreAlbumTracks"
         @update:quality="quality = $event"
         @update:with-lyric="withLyric = $event"
         @update:lyric-mode="lyricMode = $event"
@@ -921,7 +1055,12 @@ async function retryFailedEnqueue() {
             :album-folder-template="albumFolderTemplate"
             :show-back="false"
             :library-keys="albumLibraryKeys"
+            :has-more="albumHasMore"
+            :loading-more="albumLoadingMore"
+            :total-count="albumTotal"
             @enqueue="enqueueAlbumTracks"
+            @enqueue-all="enqueueWholeAlbum"
+            @load-more="loadMoreAlbumTracks"
             @update:quality="quality = $event"
             @update:with-lyric="withLyric = $event"
             @update:lyric-mode="lyricMode = $event"

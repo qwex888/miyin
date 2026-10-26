@@ -182,3 +182,47 @@ export async function fetchPlaylistEnqueueNdjson(
     handlers?.signal,
   )
 }
+
+export type AlbumEnqueueHandlers = {
+  signal?: AbortSignal
+  /** 阶段切换：`parsing` = 服务端翻页拉全曲目，`matching` = 逐条入队 */
+  onStart?: (total: number, stage?: string) => void
+  /** 服务端翻页拉取进度（`index` = 已拉取集数，`total` = 已知总集数，未知时 0） */
+  onFetchProgress?: (event: PlaylistParseStreamProgressEvent) => void
+  onProgress?: (event: PlaylistEnqueueStreamProgressEvent) => void
+}
+
+/**
+ * 整专下载（Issue #40）：服务端按游标翻页拉全 + 入队，前端只消费进度。
+ * 专辑有几千集时，详情页只加载了前几页，这里不受影响。
+ */
+export async function fetchAlbumEnqueueAllNdjson(
+  body: {
+    platform: string
+    albumId: string
+    albumTitle?: string
+    albumArtist?: string
+    albumCover?: string
+    quality?: string
+    downloadLyric?: boolean
+    lyricMode?: 'external' | 'embedded'
+    albumDownloadToFolder?: boolean
+    albumFolderTemplate?: string
+  },
+  handlers?: AlbumEnqueueHandlers,
+): Promise<PlaylistEnqueueStreamDoneEvent> {
+  return await streamNdjson<PlaylistEnqueueStreamDoneEvent>(
+    apiUrl('/api/album/enqueue-all'),
+    body,
+    (event) => {
+      if (event.type === 'start') {
+        handlers?.onStart?.(event.total, event.stage)
+      } else if (event.type === 'parse_progress') {
+        handlers?.onFetchProgress?.(event)
+      } else if (event.type === 'progress') {
+        handlers?.onProgress?.(event as PlaylistEnqueueStreamProgressEvent)
+      }
+    },
+    handlers?.signal,
+  )
+}

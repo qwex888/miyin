@@ -42,10 +42,43 @@ const QQ_HEADERS = {
 export const ALBUM_CAPABLE_PLATFORMS = ['wy', 'tx', 'kw', 'kg'] as const
 export type AlbumCapablePlatform = (typeof ALBUM_CAPABLE_PLATFORMS)[number]
 
-/** 专辑曲目分页：单页条数（kg/kw）；与历史 kg pagesize 对齐 */
+/**
+ * 专辑曲目分页：单页条数。
+ * ⚠️ 仅适用于**尊重 `rn`/`pagesize` 的上游**（实测 kw `rn=500` 有效）。
+ * 酷狗 `album/song` 无视 `pagesize`、恒回 100 条 → 用 `ALBUM_TRACKS_PAGE_SIZE.kg`，不要用本常量。
+ */
 export const ALBUM_SONG_PAGE_SIZE = 500
 /** 专辑曲目分页硬顶，防止上游 total 异常导致死循环 */
 export const ALBUM_SONG_MAX_PAGES = 50
+
+/**
+ * 各平台专辑曲目「**实际生效**」的单页条数（0 = 单次全量）。
+ *
+ * 实测（2026-10-23）：
+ * - `tx`  `song_begin`/`song_num` 生效，单次上限 1000，用 500 分页；
+ * - `kg`  `pagesize` **被无视**，恒 100 条/页（传 200/300/500 都只回 100），`page` 翻页正常；
+ * - `kw`  `rn` 生效，实测 236 首专辑 `rn=500` 回 236 条；
+ * - `wy`  `/api/v1/album/{id}` 单次全量，无分页概念。
+ *
+ * ⚠️ 分页游标必须落在本表定义的页边界上（`cursor % pageSize === 0`），
+ *    否则 kg 会请求到「半页」位置并重复返回已加载条目。
+ */
+export const ALBUM_TRACKS_PAGE_SIZE: Record<AlbumCapablePlatform, number> = {
+  wy: 0,
+  tx: 500,
+  kw: 500,
+  kg: 100,
+}
+
+/** 单张专辑最多拉取条数（硬顶：20000 集，防上游异常时无限翻页） */
+export const ALBUM_TRACKS_MAX_ITEMS = 20_000
+
+/** 前端搜索页传入的专辑元信息（仅用于展示 / 归档命名，不参与分页） */
+export type AlbumMetaHint = {
+  title?: string
+  artist?: string
+  cover?: string
+}
 
 export function listAlbumCapablePlatforms(): AlbumCapablePlatform[] {
   return [...ALBUM_CAPABLE_PLATFORMS]
@@ -400,20 +433,76 @@ async function searchTxAlbums(keyword: string, page: number): Promise<SearchAlbu
   return outcome.items
 }
 
-async function getTxAlbumDetail(albumId: string): Promise<AlbumDetail> {
-  // QQ 专辑详情为单次全量 list，请求侧无 pagesize；total_song_num 与 list 对齐由上游保证。
-  const url =
+/**
+ * 单页拉取的中间结果（原始粒度，供 `getAlbumTracksPage` 去重与游标推进）。
+ * `rawCount` 是**去重前**的本页条数 —— 判断「还有下一页」必须用它，
+ * 不能用去重后的条数（页边界重复会让它变小，被误判成末页）。
+ */
+type AlbumRawPage = {
+  album: SearchAlbum
+  tracks: SearchTrack[]
+  rawCount: number
+  hasMore: boolean
+  total?: number
+}
+
+function txAlbumInfoUrl(albumId: string, begin: number, num: number) {
+  return (
     `https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg?` +
-    `albummid=${encodeURIComponent(albumId)}&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0`
-  const data = await fetchJson(url, { headers: QQ_HEADERS })
+    `albummid=${encodeURIComponent(albumId)}&format=json&inCharset=utf-8&outCharset=utf-8` +
+    `&notice=0&platform=yqq&needNewCode=0&song_begin=${begin}&song_num=${num}`
+  )
+}
+
+/**
+ * QQ 的 `total_song_num` 在超过 1000 时会被**同步截断成 1000**（实测 2637 集的专辑返回 1000），
+ * 所以 `>= 1000` 一律视为「不可信」，交由末页真实条数计算总数。
+ */
+function txReliableTrackCount(raw: unknown): number | undefined {
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return n >= 1000 ? undefined : n
+}
+
+/**
+ * tx 专辑曲目分页：`song_begin` + `song_num`。
+ * ⚠️ 不传这两个参数时上游**单次硬顶 1000 条**（且把 total_song_num 一起截断），
+ *    这正是 issue #40「超 1000 集有声书只能下 1000 集」的根因。
+ */
+async function fetchTxAlbumPage(
+  albumId: string,
+  cursor: number,
+  hint?: AlbumMetaHint,
+): Promise<AlbumRawPage> {
+  const pageSize = ALBUM_TRACKS_PAGE_SIZE.tx
+  const data = await fetchJson(txAlbumInfoUrl(albumId, cursor, pageSize), { headers: QQ_HEADERS })
   // 实测成功码为 0；非法 albummid 返回 HTTP 200 + code 1101 "para error!"（不能当空专辑吞掉）
   if (data?.code !== undefined && data.code !== 0) {
     const sub = data.subcode && data.subcode !== data.code ? ` subcode ${data.subcode}` : ''
     throw new Error(`${data.message || 'upstream error'} (code ${data.code}${sub})`)
   }
-  const detail = mapTxAlbumDetail(data, albumId)
-  if (!detail.tracks.length) throw new Error('专辑曲目为空')
-  return detail
+  const info = data?.data || {}
+  // 越界时上游返回 list: null（不是 []）→ 必须显式判数组
+  const raw: any[] = Array.isArray(info?.list) ? info.list : []
+  const albumTitle = hint?.title || info?.name || '未知'
+  const album: SearchAlbum = {
+    id: `tx:${albumId}`,
+    externalId: albumId,
+    title: albumTitle,
+    artist: cleanArtist(String(hint?.artist || info?.singername || artistsJoin(info?.singer) || '未知')),
+    trackCount: txReliableTrackCount(info?.total_song_num),
+    cover: hint?.cover || `https://y.qq.com/music/photo_new/T002R300x300M000${albumId}.jpg`,
+    platform: 'tx',
+    publishTime: info?.aDate || info?.pub_time ? String(info.aDate || info.pub_time) : undefined,
+  }
+  const tracks = polishTracks(raw.map((s: any) => mapTxAlbumSong(s, albumTitle, albumId)))
+  return {
+    album,
+    tracks,
+    rawCount: raw.length,
+    hasMore: raw.length >= pageSize,
+    total: album.trackCount,
+  }
 }
 
 /** kw 专辑搜索映射 */
@@ -691,49 +780,48 @@ function kgAlbumSongList(payload: any): any[] {
   return payload?.lists || payload?.songs || []
 }
 
-async function getKgAlbumDetail(albumId: string): Promise<AlbumDetail> {
-  // mobilecdn album/song 单页最多 pagesize 条；>500 须翻页，硬顶防死循环。
-  const allSongs: any[] = []
-  let total = Number.POSITIVE_INFINITY
-  const headers = { Referer: 'https://www.kugou.com/' }
-
-  for (let page = 1; page <= ALBUM_SONG_MAX_PAGES && allSongs.length < total; page++) {
-    const url =
-      `http://mobilecdn.kugou.com/api/v3/album/song?albumid=${encodeURIComponent(albumId)}` +
-      `&page=${page}&pagesize=${ALBUM_SONG_PAGE_SIZE}&version=9108`
-    const data = await fetchJson(url, { headers })
-    const payload = data?.data || data
-    if (page === 1) {
-      const t = Number(payload?.total ?? payload?.info?.songcount)
-      if (Number.isFinite(t) && t > 0) total = t
-    }
-    const list = kgAlbumSongList(payload)
-    if (!list.length) break
-    const before = allSongs.length
-    allSongs.push(...list)
-    const deduped = dedupeAlbumSongs(allSongs, (s) =>
-      String(s.FileHash || s.HQFileHash || s.hash || ''),
-    )
-    allSongs.length = 0
-    allSongs.push(...deduped)
-    if (allSongs.length === before) break
-    if (list.length < ALBUM_SONG_PAGE_SIZE) break
+/**
+ * kg 专辑曲目分页。
+ *
+ * ⚠️ `pagesize` **被上游无视**：传 100/200/300/500 一律只回 100 条（实测 2026-10-23）。
+ * 历史实现用 `list.length < ALBUM_SONG_PAGE_SIZE(500)` 判末页 → 第一页就被误判成结尾，
+ * 导致任何 >100 首的专辑都只显示 100 集。现在页大小与判据统一用 `ALBUM_TRACKS_PAGE_SIZE.kg`。
+ */
+async function fetchKgAlbumPage(
+  albumId: string,
+  cursor: number,
+  hint?: AlbumMetaHint,
+): Promise<AlbumRawPage> {
+  const pageSize = ALBUM_TRACKS_PAGE_SIZE.kg
+  const page = Math.floor(cursor / pageSize) + 1
+  const url =
+    `http://mobilecdn.kugou.com/api/v3/album/song?albumid=${encodeURIComponent(albumId)}` +
+    `&page=${page}&pagesize=${pageSize}&version=9108`
+  const data = await fetchJson(url, { headers: { Referer: 'https://www.kugou.com/' } })
+  const payload = data?.data || data
+  const list = kgAlbumSongList(payload)
+  const totalRaw = Number(payload?.total ?? payload?.info?.songcount)
+  const total = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : undefined
+  const albumTitle = hint?.title || `专辑 ${albumId}`
+  const album: SearchAlbum = {
+    id: `kg:${albumId}`,
+    externalId: albumId,
+    title: albumTitle,
+    artist: cleanArtist(String(hint?.artist || '未知')),
+    trackCount: total,
+    cover: hint?.cover,
+    platform: 'kg',
   }
-
-  const detail = mapKgAlbumDetail(
-    {
-      data: {
-        total:
-          Number.isFinite(total) && total !== Number.POSITIVE_INFINITY
-            ? total
-            : allSongs.length,
-        info: allSongs,
-      },
-    },
-    albumId,
-  )
-  if (!detail.tracks.length) throw new Error('专辑曲目为空')
-  return detail
+  const tracks = polishTracks(list.map((s: any) => mapKgAlbumSong(s, albumTitle, album.cover)))
+  // kg 的 total 可信：用它提前收尾，避免「总数正好是页大小整数倍」时多打一次空请求
+  const reachedEnd = total != null && cursor + list.length >= total
+  return {
+    album,
+    tracks,
+    rawCount: list.length,
+    hasMore: list.length >= pageSize && !reachedEnd,
+    total,
+  }
 }
 
 const albumSearchAdapters: Record<
@@ -746,20 +834,197 @@ const albumSearchAdapters: Record<
   kg: searchKgAlbums,
 }
 
-const albumDetailAdapters: Record<AlbumCapablePlatform, (albumId: string) => Promise<AlbumDetail>> = {
-  wy: getWyAlbumDetail,
-  tx: getTxAlbumDetail,
-  kw: getKwAlbumDetail,
-  kg: getKgAlbumDetail,
+/** wy / kw 为单次全量接口（kw 内部自己按 rn 翻页），视为「只有一页」 */
+async function fetchWyAlbumPage(
+  albumId: string,
+  cursor: number,
+  hint?: AlbumMetaHint,
+): Promise<AlbumRawPage> {
+  if (cursor > 0) return { album: emptyAlbum('wy', albumId, hint), tracks: [], rawCount: 0, hasMore: false }
+  const detail = await getWyAlbumDetail(albumId)
+  return {
+    album: mergeAlbumHint(detail.album, hint),
+    tracks: detail.tracks,
+    rawCount: detail.tracks.length,
+    hasMore: false,
+    total: detail.tracks.length,
+  }
+}
+
+async function fetchKwAlbumPage(
+  albumId: string,
+  cursor: number,
+  hint?: AlbumMetaHint,
+): Promise<AlbumRawPage> {
+  if (cursor > 0) return { album: emptyAlbum('kw', albumId, hint), tracks: [], rawCount: 0, hasMore: false }
+  const detail = await getKwAlbumDetail(albumId)
+  return {
+    album: mergeAlbumHint(detail.album, hint),
+    tracks: detail.tracks,
+    rawCount: detail.tracks.length,
+    hasMore: false,
+    total: detail.tracks.length,
+  }
+}
+
+const albumPageFetchers: Record<
+  AlbumCapablePlatform,
+  (albumId: string, cursor: number, hint?: AlbumMetaHint) => Promise<AlbumRawPage>
+> = {
+  wy: fetchWyAlbumPage,
+  tx: fetchTxAlbumPage,
+  kw: fetchKwAlbumPage,
+  kg: fetchKgAlbumPage,
 }
 
 const albumSearchCache = new Map<string, { at: number; items: SearchAlbum[] }>()
-const albumDetailCache = new Map<string, { at: number; detail: AlbumDetail }>()
+/** 详情页缓存：key = `platform:albumId:cursor`，按页缓存而非整张专辑，避免 2637 集常驻内存 */
+const albumPageCache = new Map<string, { at: number; page: AlbumTracksPage }>()
+/** 详情页缓存上限（32 页 ≈ 最多 16000 条的展示数据） */
+const ALBUM_PAGE_CACHE_MAX = 32
 const ALBUM_TTL_MS = 60_000
+
+function emptyAlbum(platform: AlbumCapablePlatform, albumId: string, hint?: AlbumMetaHint): SearchAlbum {
+  return {
+    id: `${platform}:${albumId}`,
+    externalId: albumId,
+    title: hint?.title || `专辑 ${albumId}`,
+    artist: hint?.artist || '未知',
+    cover: hint?.cover,
+    platform,
+  }
+}
+
+/** 搜索结果带过来的标题/歌手/封面优先于上游（kg album/song 不返回专辑元信息） */
+function mergeAlbumHint(album: SearchAlbum, hint?: AlbumMetaHint): SearchAlbum {
+  if (!hint) return album
+  return {
+    ...album,
+    title: hint.title || album.title,
+    artist: hint.artist || album.artist,
+    cover: hint.cover || album.cover,
+  }
+}
+
+function evictAlbumPageCache() {
+  while (albumPageCache.size > ALBUM_PAGE_CACHE_MAX) {
+    const oldest = albumPageCache.keys().next().value
+    if (oldest === undefined) break
+    albumPageCache.delete(oldest)
+  }
+}
+
+function dedupeTracksByExternalId(tracks: SearchTrack[]): SearchTrack[] {
+  const seen = new Set<string>()
+  const out: SearchTrack[] = []
+  for (const t of tracks) {
+    const key = `${t.platform}:${t.externalId || t.id}`
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    out.push(t)
+  }
+  return out
+}
+
+export type AlbumTracksPage = {
+  album: SearchAlbum
+  tracks: SearchTrack[]
+  /** 是否还有下一页（前端据此触底加载） */
+  hasMore: boolean
+  /** 已知总集数；tx 上游谎报，故只有拉到末页或 kg/kw 才可信 */
+  total?: number
+  /** 下一页游标（= 已消费的原始条数，保证落在上游页边界） */
+  nextCursor: number
+}
+
+/**
+ * 专辑曲目分页（唯一入口）。
+ *
+ * 设计要点：
+ * - **分页不拉全量**：一次只取一页，首屏 <1s；整专下载走 `/api/album/enqueue-all` 流式。
+ * - **游标按上游页边界对齐**：`cursor` 向下取整到 `pageSize` 的整数倍，避免 kg 请求半页。
+ * - **`hasMore` 只看本页原始条数是否满页**，永不使用上游 `total`（tx 会谎报成 1000）。
+ */
+export async function getAlbumTracksPage(
+  platform: string,
+  albumId: string,
+  cursor = 0,
+  hint?: AlbumMetaHint,
+): Promise<AlbumTracksPage> {
+  if (!isAlbumCapable(platform)) {
+    throw createError({ statusCode: 400, statusMessage: `暂不支持专辑详情: ${platform}` })
+  }
+  const id = String(albumId || '').trim()
+  if (!id) throw createError({ statusCode: 400, statusMessage: '缺少 albumId' })
+
+  const pageSize = ALBUM_TRACKS_PAGE_SIZE[platform]
+  const safeCursor = pageSize > 0 ? Math.max(0, Math.floor(Number(cursor) || 0)) : 0
+  const alignedCursor = pageSize > 0 ? Math.floor(safeCursor / pageSize) * pageSize : 0
+  const key = `albumPage:${platform}:${id}:${alignedCursor}`
+  const hit = albumPageCache.get(key)
+  if (hit && Date.now() - hit.at < ALBUM_TTL_MS) return hit.page
+
+  try {
+    const raw = await albumPageFetchers[platform](id, alignedCursor, hint)
+    const tracks = dedupeTracksByExternalId(raw.tracks)
+    if (!tracks.length && alignedCursor === 0) throw new Error('专辑曲目为空')
+    // 游标推进用「原始条数」：页边界重复导致去重后变少时，仍能正确前进
+    const consumed = raw.rawCount || tracks.length
+    const nextCursor = alignedCursor + consumed
+    const total = raw.total ?? (raw.hasMore ? undefined : nextCursor)
+    const page: AlbumTracksPage = {
+      album: mergeAlbumHint(raw.album, hint),
+      tracks,
+      hasMore: raw.hasMore && nextCursor < ALBUM_TRACKS_MAX_ITEMS,
+      total,
+      nextCursor,
+    }
+    albumPageCache.set(key, { at: Date.now(), page })
+    evictAlbumPageCache()
+    return page
+  } catch (err: any) {
+    const detail = String(err?.message || err || 'unknown')
+    throw createError({
+      statusCode: 502,
+      statusMessage: 'Bad Gateway',
+      message: `专辑详情失败(${platformLabel(platform)}): ${detail}`,
+      data: { platform, albumId: id, reason: detail },
+    })
+  }
+}
+
+/**
+ * 一次性拉全专辑曲目（兼容旧调用 / 测试用）。
+ * ⚠️ 2637 集的专辑会有 ~27 次上游请求（kg），**HTTP 接口不要用它**——
+ *    `album/detail` 走 `getAlbumTracksPage`，整专下载走 `album/enqueue-all` 流式。
+ */
+export async function getAlbumDetail(
+  platform: string,
+  albumId: string,
+  hint?: AlbumMetaHint,
+): Promise<AlbumDetail> {
+  const all: SearchTrack[] = []
+  let album: SearchAlbum | null = null
+  let cursor = 0
+  const pageSize = ALBUM_TRACKS_PAGE_SIZE[platform as AlbumCapablePlatform] || ALBUM_SONG_PAGE_SIZE
+  // 页数上限按「硬顶条数 / 页大小」推导，而不是固定的 ALBUM_SONG_MAX_PAGES
+  const maxPages = Math.ceil(ALBUM_TRACKS_MAX_ITEMS / Math.max(1, pageSize)) + 1
+  for (let guard = 0; guard < maxPages; guard++) {
+    const page = await getAlbumTracksPage(platform, albumId, cursor, hint)
+    album = page.album
+    all.push(...page.tracks)
+    cursor = page.nextCursor
+    if (!page.hasMore || !page.tracks.length) break
+  }
+  if (!album) throw createError({ statusCode: 502, statusMessage: '专辑详情失败' })
+  const tracks = dedupeTracksByExternalId(all)
+  if (!tracks.length) throw createError({ statusCode: 502, statusMessage: '专辑曲目为空' })
+  return { album: { ...album, trackCount: tracks.length }, tracks }
+}
 
 export function clearAlbumCache() {
   albumSearchCache.clear()
-  albumDetailCache.clear()
+  albumPageCache.clear()
 }
 
 function isAlbumCapable(platform: string): platform is AlbumCapablePlatform {
@@ -797,30 +1062,6 @@ export async function searchAlbums(platform: string, keyword: string, page = 1) 
       statusMessage: 'Bad Gateway',
       message: `专辑搜索失败(${platformLabel(platform)}): ${detail}`,
       data: { platform, scope: 'albumSearch', reason: detail },
-    })
-  }
-}
-
-export async function getAlbumDetail(platform: string, albumId: string) {
-  if (!isAlbumCapable(platform)) {
-    throw createError({ statusCode: 400, statusMessage: `暂不支持专辑详情: ${platform}` })
-  }
-  const id = String(albumId || '').trim()
-  if (!id) throw createError({ statusCode: 400, statusMessage: '缺少 albumId' })
-  const key = `albumDetail:${platform}:${id}`
-  const hit = albumDetailCache.get(key)
-  if (hit && Date.now() - hit.at < ALBUM_TTL_MS) return hit.detail
-  try {
-    const detail = await albumDetailAdapters[platform](id)
-    albumDetailCache.set(key, { at: Date.now(), detail })
-    return detail
-  } catch (err: any) {
-    const detail = String(err?.message || err || 'unknown')
-    throw createError({
-      statusCode: 502,
-      statusMessage: 'Bad Gateway',
-      message: `专辑详情失败(${platformLabel(platform)}): ${detail}`,
-      data: { platform, albumId: id, reason: detail },
     })
   }
 }

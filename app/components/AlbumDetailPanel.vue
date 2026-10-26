@@ -41,17 +41,28 @@ const props = withDefaults(
     showBack?: boolean
     /** 「已在库」徽标（C3）：命中下载记录的 `dedupKey` 集合 */
     libraryKeys?: Set<string>
+    /** 还有未加载的曲目（触底 / 手动继续加载） */
+    hasMore?: boolean
+    loadingMore?: boolean
+    /** 专辑总集数；上游谎报或未知时为 null → 只显示「已加载 N 集」 */
+    totalCount?: number | null
   }>(),
   {
     loading: false,
     showBack: true,
     libraryKeys: () => new Set<string>(),
+    hasMore: false,
+    loadingMore: false,
+    totalCount: null,
   },
 )
 
 const emit = defineEmits<{
   back: []
   enqueue: [indices: number[]]
+  /** 整专下载：由父组件走服务端流式翻页，不受「已加载」限制 */
+  enqueueAll: []
+  loadMore: []
   'update:quality': [v: DownloadQuality]
   'update:withLyric': [v: boolean]
   'update:lyricMode': [v: 'external' | 'embedded']
@@ -91,6 +102,20 @@ watch(
   { immediate: true },
 )
 
+/**
+ * 追加分页后：若追加前是「全选」状态，则把新加载的曲目也一并选中，
+ * 与用户心智一致（否则会变成「全选」只选了前 500 集）。
+ */
+watch(
+  () => props.detail.tracks.length,
+  (len, prev) => {
+    if (!prev || len <= prev) return
+    if (selected.value.size >= prev) {
+      selected.value = new Set(props.detail.tracks.map((_, i) => i))
+    }
+  },
+)
+
 function fmtDur(sec?: number) {
   const s = Math.max(0, Math.round(sec || 0))
   const m = Math.floor(s / 60)
@@ -117,10 +142,17 @@ function enqueueSelected() {
   emit('enqueue', [...selected.value].sort((a, b) => a - b))
 }
 
+/** 整专下载：不依赖已加载的曲目，交给父组件走服务端翻页 */
 function enqueueAll() {
-  selected.value = new Set(props.detail.tracks.map((_, i) => i))
-  enqueueSelected()
+  emit('enqueueAll')
 }
+
+const loadedText = computed(() => {
+  if (props.totalCount && props.totalCount > 0) {
+    return `已加载 ${props.detail.tracks.length} / 共 ${props.totalCount} 集`
+  }
+  return `已加载 ${props.detail.tracks.length} 集`
+})
 </script>
 
 <template>
@@ -132,7 +164,7 @@ function enqueueAll() {
         <div>
           <h2>{{ detail.album.title }}</h2>
           <p class="muted">{{ detail.album.artist }}</p>
-          <p v-if="detail.album.trackCount" class="muted">{{ detail.album.trackCount }} 首 · {{ detail.album.platform }}</p>
+          <p class="muted">{{ loadedText }} · {{ detail.album.platform }}</p>
         </div>
       </div>
     </div>
@@ -195,14 +227,14 @@ function enqueueAll() {
     <div class="toolbar">
       <label class="check">
         <input type="checkbox" :checked="allSelected" @change="toggleAll" />
-        全选（已选 {{ selected.size }} / {{ detail.tracks.length }}）
+        全选（已选 {{ selected.size }} / 已加载 {{ detail.tracks.length }}）
       </label>
       <div class="toolbar-actions">
         <button class="btn btn-ghost" type="button" :disabled="!selected.size || loading" @click="enqueueSelected">
           下载选中
         </button>
         <button class="btn" type="button" :disabled="!detail.tracks.length || loading" @click="enqueueAll">
-          {{ loading ? '入队中…' : '一键整专' }}
+          {{ loading ? '入队中…' : totalCount ? `整专下载（${totalCount} 集）` : '整专下载' }}
         </button>
       </div>
     </div>
@@ -214,6 +246,9 @@ function enqueueAll() {
         :estimate-size="52"
         :dynamic="true"
         fill
+        :has-more="hasMore"
+        :loading="loadingMore"
+        @load-more="emit('loadMore')"
       >
         <template #default="{ item: t, index: i }">
           <label class="track-row">
@@ -234,6 +269,13 @@ function enqueueAll() {
         </template>
       </VirtualList>
       <p v-else class="muted empty-tracks">暂无曲目</p>
+    </div>
+
+    <div v-if="hasMore || loadingMore" class="more-bar">
+      <span class="muted">{{ loadedText }}</span>
+      <button class="btn btn-ghost" type="button" :disabled="loadingMore" @click="emit('loadMore')">
+        {{ loadingMore ? '加载中…' : '加载更多' }}
+      </button>
     </div>
   </div>
 </template>
@@ -334,6 +376,21 @@ function enqueueAll() {
   border-radius: 8px;
   background: var(--bg);
   -webkit-overflow-scrolling: touch;
+}
+.more-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 2px 0;
+  font-size: 12px;
+}
+.more-bar .btn {
+  min-width: 96px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 8px;
 }
 .empty-tracks {
   padding: 24px;
