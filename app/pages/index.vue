@@ -775,15 +775,17 @@ async function enqueueAlbumTracks(indices: number[]) {
     return
   }
   downloading.value = true
-  loadingText.value = '入队中…'
-  loading.value = true
   try {
     const { album } = albumDetail.value
-    // ①A：先预检，重复项交给聚合弹窗裁决
+    // ①A：先预检，重复项交给聚合弹窗裁决。
+    // 预检与裁决期间不能开 loading 遮罩：PageLoading（z-index 200）会盖住
+    // DuplicateReviewDialog（z-index 100）并吞掉所有点击，导致卡在「入队中…」
     const decisions = await checkDuplicates(
       tracks.map((t) => ({ title: t.title, artist: t.artist, album: t.album || album.title })),
     )
     if (decisions === null) return
+    loadingText.value = '入队中…'
+    loading.value = true
 
     const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
@@ -884,14 +886,16 @@ async function enqueueWholeAlbum() {
 async function enqueueSelectedSongs(tracks: SearchTrack[]) {
   if (!tracks.length || downloading.value) return
   downloading.value = true
-  loadingText.value = '入队中…'
-  loading.value = true
   try {
-    // ①A：先预检，重复项交给聚合弹窗裁决
+    // ①A：先预检，重复项交给聚合弹窗裁决。
+    // 预检与裁决期间不能开 loading 遮罩：PageLoading（z-index 200）会盖住
+    // DuplicateReviewDialog（z-index 100）并吞掉所有点击，导致卡在「入队中…」
     const decisions = await checkDuplicates(
       tracks.map((t) => ({ title: t.title, artist: t.artist, album: t.album })),
     )
     if (decisions === null) return
+    loadingText.value = '入队中…'
+    loading.value = true
 
     const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
