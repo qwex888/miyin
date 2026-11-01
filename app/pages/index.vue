@@ -825,6 +825,22 @@ async function enqueueAlbumTracks(indices: number[]) {
 }
 
 /**
+ * 整专下载的取消入口（与歌单导入页同一模式，Issue #43）：
+ * 流式任务进行中可随时中止，避免匹配/拉取卡住时只能干等或刷新页面。
+ */
+const albumEnqueueAbort = ref<AbortController | null>(null)
+const albumEnqueueCancelText = ref('取消拉取')
+
+function cancelAlbumEnqueue() {
+  if (albumEnqueueAbort.value) {
+    albumEnqueueAbort.value.abort()
+    albumEnqueueAbort.value = null
+  }
+  loading.value = false
+  toast.info('已取消整专下载')
+}
+
+/**
  * 整专下载（Issue #40）：不依赖已加载的曲目 —— 服务端按游标自己翻页拉全 + 入队，
  * 前端只消费 NDJSON 进度。2637 集的专辑也不会撑爆首屏或详情响应。
  */
@@ -835,6 +851,9 @@ async function enqueueWholeAlbum() {
   downloading.value = true
   loading.value = true
   loadingText.value = '拉取专辑曲目…'
+  albumEnqueueCancelText.value = '取消拉取'
+  const abortController = new AbortController()
+  albumEnqueueAbort.value = abortController
   try {
     const res = await fetchAlbumEnqueueAllNdjson(
       {
@@ -850,8 +869,12 @@ async function enqueueWholeAlbum() {
         albumFolderTemplate: albumFolderTemplate.value.trim() || '{album}',
       },
       {
+        signal: abortController.signal,
         onStart: (total, stage) => {
-          if (stage === 'matching') loadingText.value = `入队中…（共 ${total} 集）`
+          if (stage === 'matching') {
+            loadingText.value = `入队中…（共 ${total} 集）`
+            albumEnqueueCancelText.value = '取消下载'
+          }
         },
         onFetchProgress: (e) => {
           loadingText.value = e.total
@@ -870,8 +893,11 @@ async function enqueueWholeAlbum() {
     useDownloadBadge().notifyChanged()
     void refreshAlbumLibraryKeys()
   } catch (e: unknown) {
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError' || abortController.signal.aborted) return
     toast.error(apiErrorMessage(e, '整专下载失败'))
   } finally {
+    if (albumEnqueueAbort.value === abortController) albumEnqueueAbort.value = null
     downloading.value = false
     loading.value = false
   }
@@ -967,7 +993,13 @@ async function retryFailedEnqueue() {
 
 <template>
   <div class="page page-home">
-    <PageLoading :show="loading" :text="loadingText" />
+    <PageLoading
+      :show="loading"
+      :text="loadingText"
+      :cancelable="Boolean(albumEnqueueAbort)"
+      :cancel-text="albumEnqueueCancelText"
+      @cancel="cancelAlbumEnqueue"
+    />
     <FnOsDirAuthDialog
       :open="showFnOsAuthDialog"
       @authorize="goFnOsAuthorize"
