@@ -11,7 +11,7 @@ import { getDb } from '../utils/db'
  * （最早导入）排在最后、根本走不到。"新"与"可靠"没有因果关系。
  */
 
-export type SourceOutcome = 'success' | 'preview' | 'quality-lie'
+export type SourceOutcome = 'success' | 'preview' | 'quality-lie' | 'invalid-content'
 
 /** 无历史记录时的中性分。给得不算低，保证新音源仍有被验证的机会（防马太效应） */
 export const COLD_START_SCORE = 0.3
@@ -26,9 +26,13 @@ const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
  * 惩罚权重。**谎报比试听更重** —— 代价不同：
  * - 试听在 L1 探测阶段就被识别，只花一次请求头
  * - 谎报要**下完整个文件**才被 L2 魔数发现，白费带宽与时间
+ *
+ * **坏内容最重**：不仅白费整个文件的带宽，拿到的还是网页/残文件 ——
+ * 落盘后曲库被污染，用户还得自己排查清理。
  */
 const PREVIEW_PENALTY = 0.4
 const LIE_PENALTY = 0.6
+const INVALID_CONTENT_PENALTY = 0.8
 
 type SourceStatRow = {
   source_id: string
@@ -37,6 +41,7 @@ type SourceStatRow = {
   successes: number
   previews: number
   quality_lies: number
+  invalid_contents: number
   kbps_sum: number
   kbps_count: number
   last_success_at: string | null
@@ -57,14 +62,15 @@ export function recordSourceOutcome(input: {
     getDb()
       .prepare(
         `INSERT INTO source_stats (
-           source_id, platform, attempts, successes, previews, quality_lies,
+           source_id, platform, attempts, successes, previews, quality_lies, invalid_contents,
            kbps_sum, kbps_count, last_success_at
-         ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(source_id, platform) DO UPDATE SET
            attempts = attempts + 1,
            successes = successes + excluded.successes,
            previews = previews + excluded.previews,
            quality_lies = quality_lies + excluded.quality_lies,
+           invalid_contents = invalid_contents + excluded.invalid_contents,
            kbps_sum = kbps_sum + excluded.kbps_sum,
            kbps_count = kbps_count + excluded.kbps_count,
            last_success_at = COALESCE(excluded.last_success_at, source_stats.last_success_at)`,
@@ -75,6 +81,7 @@ export function recordSourceOutcome(input: {
         isSuccess ? 1 : 0,
         input.outcome === 'preview' ? 1 : 0,
         input.outcome === 'quality-lie' ? 1 : 0,
+        input.outcome === 'invalid-content' ? 1 : 0,
         kbps,
         kbps ? 1 : 0,
         isSuccess ? new Date().toISOString() : null,
@@ -98,12 +105,14 @@ function scoreOf(row: SourceStatRow, maxKbps: number): number {
       : 0
   const previewRate = row.previews / row.attempts
   const lieRate = row.quality_lies / row.attempts
+  const invalidRate = row.invalid_contents / row.attempts
   return (
     0.45 * successRate +
     0.4 * qualityScore +
     0.15 * recent -
     PREVIEW_PENALTY * previewRate -
-    LIE_PENALTY * lieRate
+    LIE_PENALTY * lieRate -
+    INVALID_CONTENT_PENALTY * invalidRate
   )
 }
 

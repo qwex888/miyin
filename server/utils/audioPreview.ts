@@ -184,6 +184,20 @@ export function previewSizeError(contentLength: number, expectedSec: number): Er
 }
 
 /**
+ * 组合预算用尽时的收尾错误 —— 全部候选都返回了**非音频内容**。
+ *
+ * 与 allPreviewError 分开：症状不同（音源返回的是网页/坏文件，不是试听片段），
+ * 提示也不同（多半是直链过期或被 CDN 拦了，换源重试前先看音源可用性）。
+ */
+export function allInvalidContentError(tried: number): Error {
+  const err = new Error(
+    `已试过 ${tried} 个音源/音质组合，均未返回可识别的音频内容（音源可能返回了错误页或文件已损坏）`,
+  )
+  ;(err as any).code = 'INVALID_CONTENT'
+  return err
+}
+
+/**
  * 组合预算用尽时的收尾错误。
  *
  * 与上面几个的区别：那几个是「这一条路走不通」的中间态，本函数是「已经试过 N 条路」的结论 ——
