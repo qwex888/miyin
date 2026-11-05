@@ -687,7 +687,8 @@ function toggleOne(id: string, checked: boolean) {
   const next = new Set(selected.value)
   if (checked) {
     next.add(id)
-    if (items.value.length > 0 && next.size === currentTabTotal.value) {
+    // 跨分类搜索没有「整分类全选」的服务端语义，逐条勾满也不能升级为全选
+    if (!isCrossTabSearch.value && items.value.length > 0 && next.size === currentTabTotal.value) {
       selectAllState.value = true
     }
   } else {
@@ -698,6 +699,7 @@ function toggleOne(id: string, checked: boolean) {
 }
 
 function toggleSelectAll() {
+  if (isCrossTabSearch.value) return
   if (selectAllState.value || (items.value.length > 0 && selected.value.size === items.value.length)) {
     clearSelection()
   } else {
@@ -818,9 +820,11 @@ async function deleteOne(t: Task) {
 async function batchDelete() {
   if (!selectedCount.value) return
   const label = selectedGroup.value === 'failed' ? '失败/取消' : '已完成'
+  // 跨分类搜索时服务端没有对应的「整分类」可删，只能按显式勾选的 id 执行
+  const useScopeAll = selectAllState.value && !isCrossTabSearch.value
   deletePending = { mode: 'batch' }
   deleteDialogTitle.value = '批量删除'
-  deleteDialogDesc.value = selectAllState.value
+  deleteDialogDesc.value = useScopeAll
     ? `确定删除${hasActiveFilters.value ? '当前筛选条件下' : '当前分类下'}全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
     : `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
   deleteDialogOpen.value = true
@@ -845,22 +849,34 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
       selected.value = new Set(selected.value)
       toast.success(payload.deleteLocalFiles ? '已删除任务与本地文件' : '已删除任务记录')
     } else {
-      const res = await $fetch<{ deleted: number }>('/api/downloads/batch-delete', {
+      const useScopeAll = selectAllState.value && !isCrossTabSearch.value
+      const res = await $fetch<{
+        deleted: number
+        errors?: Array<{ id: string; error: string }>
+      }>('/api/downloads/batch-delete', {
         method: 'POST',
         body: {
-          ids: selectAllState.value ? undefined : [...selected.value],
-          allWithTab: selectAllState.value
+          ids: useScopeAll ? undefined : [...selected.value],
+          allWithTab: useScopeAll
             ? (selectedGroup.value as 'completed' | 'failed')
             : undefined,
           // 全选含未加载的分页，筛选条件要一并交给服务端求 id，否则会删到其他音质/平台
-          filters: selectAllState.value ? activeFilterParams() : undefined,
+          filters: useScopeAll ? activeFilterParams() : undefined,
           deleteLocalFiles: payload.deleteLocalFiles,
         },
       })
       clearSelection()
-      toast.success(
-        `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
-      )
+      const failed = res.errors?.length || 0
+      if (failed) {
+        // 状态在删除前刚变成进行中等原因会拒绝删除，不能只报「已删除 N 条」把失败藏掉
+        toast.warning(
+          `已删除 ${res.deleted} 条，${failed} 条未能删除（${res.errors?.[0]?.error || '未知原因'}）`,
+        )
+      } else {
+        toast.success(
+          `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
+        )
+      }
     }
     deleteDialogOpen.value = false
     deletePending = null

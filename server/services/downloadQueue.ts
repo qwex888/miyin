@@ -1015,26 +1015,73 @@ function resolveTaskIdsForTab(
   return rows.map((r) => r.id)
 }
 
-export function batchDeleteTasks(
+const DELETE_CHUNK_SIZE = 200
+
+function chunkOf<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
+/**
+ * 批量删除任务记录（可选连带本地文件）。
+ *
+ * - 按 200 条一批查询并用 `DELETE ... WHERE id IN (...)` 删除，避免逐条 SELECT+DELETE；
+ * - 先在库中提交删除、再清理磁盘文件：文件删掉不可恢复，不能先于记录删除；
+ * - 每批之间让出事件循环，万级删除时 SSE 心跳与下载 worker 不被整段阻塞。
+ */
+export async function batchDeleteTasks(
   ids?: string[],
   opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed'; filter?: TaskListFilter },
 ) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
-    targetIds.push(...ids)
+    targetIds.push(...new Set(ids))
   } else if (opts?.tab) {
     targetIds.push(...resolveTaskIdsForTab(opts.tab, opts.filter))
   }
+
   let deleted = 0
   const errors: Array<{ id: string; error: string }> = []
-  for (const id of targetIds) {
-    try {
-      deleteTask(id, opts)
-      deleted += 1
-    } catch (e: any) {
-      errors.push({ id, error: e?.message || String(e) })
+
+  for (const chunk of chunkOf(targetIds, DELETE_CHUNK_SIZE)) {
+    const placeholders = chunk.map(() => '?').join(',')
+    const rows = getDb()
+      .prepare(`SELECT * FROM download_tasks WHERE id IN (${placeholders})`)
+      .all(...chunk) as DownloadTaskRow[]
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    const deletable: DownloadTaskRow[] = []
+    for (const id of chunk) {
+      const task = byId.get(id)
+      if (!task) {
+        errors.push({ id, error: '任务不存在' })
+      } else if (task.status === 'running' || task.status === 'queued') {
+        errors.push({ id, error: '进行中的任务请先取消' })
+      } else {
+        deletable.push(task)
+      }
     }
+    if (!deletable.length) continue
+
+    // 单条 DELETE 自带原子性：本批要么全部删除，要么（SQL 报错时）一条不删
+    const deleteIds = deletable.map((task) => task.id)
+    const deletePlaceholders = deleteIds.map(() => '?').join(',')
+    getDb()
+      .prepare(`DELETE FROM download_tasks WHERE id IN (${deletePlaceholders})`)
+      .run(...deleteIds)
+    deleted += deleteIds.length
+
+    // 记录已提交后再动磁盘，删除文件不可回滚
+    for (const task of deletable) {
+      if (opts?.deleteLocalFiles) removeTaskFiles(task)
+      downloadEvents.emit('task', { ...task, status: 'deleted' })
+    }
+
+    // 让出事件循环，避免长批量把 SSE 心跳按住
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
+
   return { deleted, errors }
 }
 
