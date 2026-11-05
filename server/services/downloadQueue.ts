@@ -251,6 +251,15 @@ export type ListTasksQuery = {
   limit?: number
 }
 
+/**
+ * 列表、统计与「全选」批量操作共用的筛选条件。
+ * 三者必须取同一组条件，否则筛选态下的分类级批量操作会作用到未筛选的任务。
+ */
+export type TaskListFilter = Pick<
+  ListTasksQuery,
+  'playlistUrl' | 'batchId' | 'q' | 'platform' | 'quality' | 'since' | 'until'
+>
+
 /** LIKE 通配符转义；token 归一化已去除标点，此处为防御性处理 */
 function escapeLikePattern(value: string) {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`)
@@ -280,12 +289,7 @@ function nextDayOf(date: string): string | null {
  * 平台 / 音质 / 入队日期 过滤。
  * **列表与统计必须共用**，否则带筛选时分页 `total` 会按全量算（同 P0 的陷阱 1）。
  */
-function buildMetaClauses(filter?: {
-  platform?: string
-  quality?: string
-  since?: string
-  until?: string
-}) {
+function buildMetaClauses(filter?: TaskListFilter) {
   const sql: string[] = []
   const params: unknown[] = []
   if (filter?.platform) {
@@ -312,6 +316,41 @@ function buildMetaClauses(filter?: {
   return { sql, params }
 }
 
+/** 分类 → 状态条件；列表、统计与分类级批量操作共用，避免语义分叉 */
+function buildTabStatusClause(tab: 'running' | 'completed' | 'failed'): string {
+  if (tab === 'running') return `status IN ('running', 'queued')`
+  if (tab === 'completed') return `status = 'completed'`
+  return `status IN ('failed', 'cancelled')`
+}
+
+/**
+ * 筛选条件 → WHERE 子句与参数。
+ * 列表、统计与「全选」批量操作都走这里，条件集合由类型 TaskListFilter 单一来源定义。
+ */
+function buildFilterClauses(filter?: TaskListFilter) {
+  const sql: string[] = []
+  const params: unknown[] = []
+
+  if (filter?.playlistUrl) {
+    sql.push('playlist_url = ?')
+    params.push(filter.playlistUrl)
+  }
+  if (filter?.batchId) {
+    sql.push('batch_id = ?')
+    params.push(filter.batchId)
+  }
+
+  const keyword = buildKeywordClauses(filter?.q)
+  sql.push(...keyword.sql)
+  params.push(...keyword.params)
+
+  const meta = buildMetaClauses(filter)
+  sql.push(...meta.sql)
+  params.push(...meta.params)
+
+  return { sql, params }
+}
+
 export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   if (typeof queryOrStatus === 'string') {
     return getDb()
@@ -323,13 +362,7 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   const params: unknown[] = []
 
   if (query.tab) {
-    if (query.tab === 'running') {
-      whereClauses.push(`status IN ('running', 'queued')`)
-    } else if (query.tab === 'completed') {
-      whereClauses.push(`status = 'completed'`)
-    } else if (query.tab === 'failed') {
-      whereClauses.push(`status IN ('failed', 'cancelled')`)
-    }
+    whereClauses.push(buildTabStatusClause(query.tab))
   } else if (query.statuses && query.statuses.length > 0) {
     const placeholders = query.statuses.map(() => '?').join(',')
     whereClauses.push(`status IN (${placeholders})`)
@@ -339,22 +372,9 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
     params.push(query.status)
   }
 
-  if (query.playlistUrl) {
-    whereClauses.push('playlist_url = ?')
-    params.push(query.playlistUrl)
-  }
-  if (query.batchId) {
-    whereClauses.push('batch_id = ?')
-    params.push(query.batchId)
-  }
-
-  const keyword = buildKeywordClauses(query.q)
-  whereClauses.push(...keyword.sql)
-  params.push(...keyword.params)
-
-  const meta = buildMetaClauses(query)
-  whereClauses.push(...meta.sql)
-  params.push(...meta.params)
+  const filter = buildFilterClauses(query)
+  whereClauses.push(...filter.sql)
+  params.push(...filter.params)
 
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
   let orderBySql = 'ORDER BY created_at DESC'
@@ -390,35 +410,8 @@ export type TaskStats = {
   cancelled: number
 }
 
-export function getTaskStats(filter?: {
-  playlistUrl?: string
-  batchId?: string
-  /** 必须与 listTasks 使用同一组过滤条件，否则分页 total 失真 */
-  q?: string
-  platform?: string
-  quality?: string
-  since?: string
-  until?: string
-}): TaskStats {
-  const whereClauses: string[] = []
-  const params: unknown[] = []
-
-  if (filter?.playlistUrl) {
-    whereClauses.push('playlist_url = ?')
-    params.push(filter.playlistUrl)
-  }
-  if (filter?.batchId) {
-    whereClauses.push('batch_id = ?')
-    params.push(filter.batchId)
-  }
-
-  const keyword = buildKeywordClauses(filter?.q)
-  whereClauses.push(...keyword.sql)
-  params.push(...keyword.params)
-
-  const meta = buildMetaClauses(filter)
-  whereClauses.push(...meta.sql)
-  params.push(...meta.params)
+export function getTaskStats(filter?: TaskListFilter): TaskStats {
+  const { sql: whereClauses, params } = buildFilterClauses(filter)
 
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
   const rows = getDb()
@@ -1001,27 +994,94 @@ export function deleteTask(id: string, opts?: { deleteLocalFiles?: boolean }) {
   return { ok: true, id }
 }
 
-export function batchDeleteTasks(ids?: string[], opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed' }) {
+/**
+ * 「全选」是跨分页的全量语义，必须由服务端按与列表/统计相同的条件求出 id。
+ * 条件缺一项，批量操作就会作用到未筛选的任务（音质/平台筛选下误删全部即由此而来）。
+ */
+function resolveTaskIdsForTab(
+  tab: 'running' | 'completed' | 'failed',
+  filter?: TaskListFilter,
+): string[] {
+  const whereClauses = [buildTabStatusClause(tab)]
+  const params: unknown[] = []
+
+  const conditions = buildFilterClauses(filter)
+  whereClauses.push(...conditions.sql)
+  params.push(...conditions.params)
+
+  const rows = getDb()
+    .prepare(`SELECT id FROM download_tasks WHERE ${whereClauses.join(' AND ')}`)
+    .all(...params) as Array<{ id: string }>
+  return rows.map((r) => r.id)
+}
+
+const DELETE_CHUNK_SIZE = 200
+
+function chunkOf<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
+/**
+ * 批量删除任务记录（可选连带本地文件）。
+ *
+ * - 按 200 条一批查询并用 `DELETE ... WHERE id IN (...)` 删除，避免逐条 SELECT+DELETE；
+ * - 先在库中提交删除、再清理磁盘文件：文件删掉不可恢复，不能先于记录删除；
+ * - 每批之间让出事件循环，万级删除时 SSE 心跳与下载 worker 不被整段阻塞。
+ */
+export async function batchDeleteTasks(
+  ids?: string[],
+  opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed'; filter?: TaskListFilter },
+) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
-    targetIds.push(...ids)
-  } else if (opts?.tab === 'completed') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status = 'completed'`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
-  } else if (opts?.tab === 'failed') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
+    targetIds.push(...new Set(ids))
+  } else if (opts?.tab) {
+    targetIds.push(...resolveTaskIdsForTab(opts.tab, opts.filter))
   }
+
   let deleted = 0
   const errors: Array<{ id: string; error: string }> = []
-  for (const id of targetIds) {
-    try {
-      deleteTask(id, opts)
-      deleted += 1
-    } catch (e: any) {
-      errors.push({ id, error: e?.message || String(e) })
+
+  for (const chunk of chunkOf(targetIds, DELETE_CHUNK_SIZE)) {
+    const placeholders = chunk.map(() => '?').join(',')
+    const rows = getDb()
+      .prepare(`SELECT * FROM download_tasks WHERE id IN (${placeholders})`)
+      .all(...chunk) as DownloadTaskRow[]
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    const deletable: DownloadTaskRow[] = []
+    for (const id of chunk) {
+      const task = byId.get(id)
+      if (!task) {
+        errors.push({ id, error: '任务不存在' })
+      } else if (task.status === 'running' || task.status === 'queued') {
+        errors.push({ id, error: '进行中的任务请先取消' })
+      } else {
+        deletable.push(task)
+      }
     }
+    if (!deletable.length) continue
+
+    // 单条 DELETE 自带原子性：本批要么全部删除，要么（SQL 报错时）一条不删
+    const deleteIds = deletable.map((task) => task.id)
+    const deletePlaceholders = deleteIds.map(() => '?').join(',')
+    getDb()
+      .prepare(`DELETE FROM download_tasks WHERE id IN (${deletePlaceholders})`)
+      .run(...deleteIds)
+    deleted += deleteIds.length
+
+    // 记录已提交后再动磁盘，删除文件不可回滚
+    for (const task of deletable) {
+      if (opts?.deleteLocalFiles) removeTaskFiles(task)
+      downloadEvents.emit('task', { ...task, status: 'deleted' })
+    }
+
+    // 让出事件循环，避免长批量把 SSE 心跳按住
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
+
   return { deleted, errors }
 }
 
