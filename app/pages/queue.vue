@@ -225,7 +225,12 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
         '/api/downloads/batch-switch-source',
         {
           method: 'POST',
-          body: { allWithTab: 'failed', sourceId: payload.sourceId },
+          body: {
+            allWithTab: 'failed',
+            sourceId: payload.sourceId,
+            // 筛选条件一起下发：否则「全选换源」会作用到筛选外的失败任务
+            filters: activeFilterParams(),
+          },
         },
       )
       const ok = res.items.filter((i) => !i.error).length
@@ -783,6 +788,7 @@ async function onQualityConfirm(payload: { quality: string }) {
             ids: selectAllState.value ? undefined : pending.tasks.map((t) => t.id),
             allWithTab: selectAllState.value ? 'failed' : undefined,
             quality: payload.quality,
+            filters: selectAllState.value ? activeFilterParams() : undefined,
           },
         },
       )
@@ -891,6 +897,7 @@ async function batchCancel() {
       body: {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'running' : undefined,
+        filters: selectAllState.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()
@@ -920,6 +927,7 @@ async function batchRetry() {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'failed' : undefined,
         resetAttempts: true,
+        filters: selectAllState.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()
