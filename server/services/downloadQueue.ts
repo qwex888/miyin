@@ -16,6 +16,7 @@ import { buildDedupKey, buildSearchText, tokenizeQuery } from '#shared/trackKey'
 import PQueue from 'p-queue'
 import { getDb, checkpointAndShrinkDb } from '../utils/db'
 import { getDownloadDir } from '../utils/paths'
+import type { TaskFilter } from '../utils/taskFilter'
 import {
   assertDownloadDirWritable,
   ensureDownloadDirWritable,
@@ -970,13 +971,43 @@ export function cancelTask(id: string) {
   return getTask(id)!
 }
 
-export function batchCancelTasks(ids?: string[], opts?: { tab?: 'running' }) {
+/**
+ * 按「分类 + 筛选」求任务 id。
+ *
+ * 与 `/api/downloads` 列表共用同一套条件构造（`buildKeywordClauses` / `buildMetaClauses`），
+ * 保证「用户看到的那一批」与「批量操作作用的那一批」严格一致。
+ * 不带 filter 时退化为原行为（整个分类），保持向后兼容。
+ */
+function selectTaskIdsByStatus(statusSql: string, filter?: TaskFilter): string[] {
+  const where: string[] = [statusSql]
+  const params: unknown[] = []
+  if (filter?.playlistUrl) {
+    where.push('playlist_url = ?')
+    params.push(filter.playlistUrl)
+  }
+  if (filter?.batchId) {
+    where.push('batch_id = ?')
+    params.push(filter.batchId)
+  }
+  const keyword = buildKeywordClauses(filter?.q)
+  where.push(...keyword.sql)
+  params.push(...keyword.params)
+  const meta = buildMetaClauses(filter)
+  where.push(...meta.sql)
+  params.push(...meta.params)
+  const rows = getDb()
+    .prepare(`SELECT id FROM download_tasks WHERE ${where.join(' AND ')}`)
+    .all(...params) as Array<{ id: string }>
+  return rows.map((r) => r.id)
+}
+
+export function batchCancelTasks(ids?: string[], opts?: { tab?: 'running'; filter?: TaskFilter }) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
     targetIds.push(...ids)
   } else if (opts?.tab === 'running') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('running', 'queued')`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
+    // 有筛选条件时只取消筛选内的任务，否则「全选」会把筛选外的运行中任务一起干掉
+    targetIds.push(...selectTaskIdsByStatus(`status IN ('running', 'queued')`, opts.filter))
   }
   const items = []
   for (const id of targetIds) {
@@ -1085,13 +1116,12 @@ export function switchQualityAndRetry(id: string, quality: string) {
   }
 }
 
-export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean; tab?: 'failed' }) {
+export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean; tab?: 'failed'; filter?: TaskFilter }) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
     targetIds.push(...ids)
   } else if (opts?.tab === 'failed') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
+    targetIds.push(...selectTaskIdsByStatus(`status IN ('failed', 'cancelled')`, opts.filter))
   }
   const items = []
   for (const id of targetIds) {
@@ -1105,26 +1135,21 @@ export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean
   return { count: targetIds.length, items }
 }
 
-function resolveFailedTabTaskIds(ids?: string[], tab?: 'failed'): string[] {
+function resolveFailedTabTaskIds(ids?: string[], tab?: 'failed', filter?: TaskFilter): string[] {
   if (ids?.length) return ids
-  if (tab === 'failed') {
-    const rows = getDb()
-      .prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`)
-      .all() as Array<{ id: string }>
-    return rows.map((r) => r.id)
-  }
+  if (tab === 'failed') return selectTaskIdsByStatus(`status IN ('failed', 'cancelled')`, filter)
   return []
 }
 
 export function batchSwitchQualityAndRetry(
   ids: string[],
   quality: string,
-  opts?: { tab?: 'failed' },
+  opts?: { tab?: 'failed'; filter?: TaskFilter },
 ) {
   if (!isAllowedQuality(quality)) {
     throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
   }
-  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab)
+  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab, opts?.filter)
   const items = []
   for (const id of targetIds) {
     try {
@@ -1213,9 +1238,9 @@ export function switchSourceAndRetry(id: string, opts?: { sourceId?: string }) {
 /** 批量换源：可统一 sourceId，或按任务指定 sourceById；支持 allWithTab=failed 全选 */
 export function batchSwitchSourceAndRetry(
   ids: string[],
-  opts?: { sourceId?: string; sourceById?: Record<string, string>; tab?: 'failed' },
+  opts?: { sourceId?: string; sourceById?: Record<string, string>; tab?: 'failed'; filter?: TaskFilter },
 ) {
-  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab)
+  const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab, opts?.filter)
   const items = []
   for (const id of targetIds) {
     try {
