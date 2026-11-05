@@ -821,7 +821,7 @@ async function batchDelete() {
   deletePending = { mode: 'batch' }
   deleteDialogTitle.value = '批量删除'
   deleteDialogDesc.value = selectAllState.value
-    ? `确定删除当前分类下全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
+    ? `确定删除${hasActiveFilters.value ? '当前筛选条件下' : '当前分类下'}全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
     : `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
   deleteDialogOpen.value = true
 }
@@ -849,10 +849,11 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
         method: 'POST',
         body: {
           ids: selectAllState.value ? undefined : [...selected.value],
-          // selectAllState 仅在非跨 tab 搜索时可用，此时 selectedGroup 恒等于当前分类
           allWithTab: selectAllState.value
             ? (selectedGroup.value as 'completed' | 'failed')
             : undefined,
+          // 全选含未加载的分页，筛选条件要一并交给服务端求 id，否则会删到其他音质/平台
+          filters: selectAllState.value ? activeFilterParams() : undefined,
           deleteLocalFiles: payload.deleteLocalFiles,
         },
       })

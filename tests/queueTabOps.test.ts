@@ -80,4 +80,51 @@ describe('Queue tab-level pagination and batch operations', () => {
     expect(deleteCompleted.deleted).toBe(4)
     expect(listTasks({ tab: 'completed' }).length).toBe(0)
   })
+
+  it('applies the active filters to tab-wide batch delete', () => {
+    const db = getDb()
+    const now = new Date().toISOString()
+    const insert = db.prepare(
+      `INSERT INTO download_tasks (id, title, artist, platform, quality, status, batch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    for (let i = 1; i <= 3; i++) {
+      insert.run(`low-${i}`, `Low ${i}`, 'Artist', 'wy', '128k', 'completed', 'b1', now, now)
+    }
+    for (let i = 1; i <= 5; i++) {
+      insert.run(`high-${i}`, `High ${i}`, 'Artist', 'wy', 'flac', 'completed', 'b1', now, now)
+    }
+
+    // 「全选」勾选框上的数量来自带筛选的 stats，服务端求出的 id 必须与之同源
+    expect(getTaskStats({ quality: '128k' }).completed).toBe(3)
+
+    const res = batchDeleteTasks(undefined, { tab: 'completed', filter: { quality: '128k' } })
+    expect(res.deleted).toBe(3)
+    expect(res.errors).toEqual([])
+
+    const remaining = listTasks({ tab: 'completed', page: 1, pageSize: 10 })
+    expect(remaining.length).toBe(5)
+    expect(remaining.every((t) => t.quality === 'flac')).toBe(true)
+
+    // 条件可叠加：批量 + 音质仍只删命中项
+    const batchRes = batchDeleteTasks(undefined, { tab: 'completed', filter: { batchId: 'b1', quality: 'flac' } })
+    expect(batchRes.deleted).toBe(5)
+    expect(listTasks({ tab: 'completed' }).length).toBe(0)
+  })
+
+  it('deletes every row of the tab when no filter is active', () => {
+    const db = getDb()
+    const now = new Date().toISOString()
+    const insert = db.prepare(
+      `INSERT INTO download_tasks (id, title, artist, platform, quality, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    insert.run('a', 'A', 'Artist', 'wy', '128k', 'completed', now, now)
+    insert.run('b', 'B', 'Artist', 'wy', 'flac', 'completed', now, now)
+    insert.run('c', 'C', 'Artist', 'wy', '320k', 'failed', now, now)
+
+    // 未筛选时保持既有语义：按分类整量删除
+    expect(batchDeleteTasks(undefined, { tab: 'completed', filter: {} }).deleted).toBe(2)
+    expect(listTasks({ tab: 'completed' }).length).toBe(0)
+    expect(batchDeleteTasks(undefined, { tab: 'failed', filter: {} }).deleted).toBe(1)
+    expect(listTasks({ tab: 'failed' }).length).toBe(0)
+  })
 })
