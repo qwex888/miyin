@@ -110,12 +110,19 @@ CREATE TABLE IF NOT EXISTS source_stats (
   successes      INTEGER NOT NULL DEFAULT 0,
   previews       INTEGER NOT NULL DEFAULT 0,
   quality_lies   INTEGER NOT NULL DEFAULT 0,
+  invalid_contents INTEGER NOT NULL DEFAULT 0,
   kbps_sum       REAL NOT NULL DEFAULT 0,
   kbps_count     INTEGER NOT NULL DEFAULT 0,
   last_success_at TEXT,
   PRIMARY KEY (source_id, platform)
 );
 `)
+
+  // 音源「返回非音频内容」（HTML 落地页 / 残缺文件）计数：老库平滑升级
+  const statCols = db.prepare(`PRAGMA table_info(source_stats)`).all() as Array<{ name: string }>
+  if (!statCols.some((c) => c.name === 'invalid_contents')) {
+    db.exec(`ALTER TABLE source_stats ADD COLUMN invalid_contents INTEGER NOT NULL DEFAULT 0`)
+  }
 
   migrateDedupKeyVersion(db)
 }

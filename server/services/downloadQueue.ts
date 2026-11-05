@@ -28,8 +28,9 @@ import { isHighestQuality, listMusicUrlCandidates } from './musicUrlResolve'
 import { recordSourceOutcome } from './sourceStats'
 import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
-import { sniffAudioExt, isLosslessClaimMismatch } from '../utils/audioSniff'
+import { sniffAudioExt, isLosslessClaimMismatch, sniffTextualPayload } from '../utils/audioSniff'
 import {
+  allInvalidContentError,
   allPreviewError,
   expectedDurationFromMusicInfo,
   isLikelyPreviewByAbsoluteDuration,
@@ -38,7 +39,7 @@ import {
   minFullTrackBytes,
   previewClipError,
   previewSizeError,
-  probeAudioInfo,
+  probeAudioContent,
   probeCandidate,
   type CandidateVerdict,
 } from '../utils/audioPreview'
@@ -1403,7 +1404,7 @@ async function processTask(task: DownloadTaskRow) {
     const qualityPref = task.quality || settings.defaultQuality
 
     /**
-     * 已确认不可用而需要跳过的 `sourceId@quality` 组合（试听 / 谎报档位）。
+     * 已确认不可用而需要跳过的 `sourceId@quality` 组合（试听 / 谎报档位 / 内容不是音频）。
      *
      * 取链成功**不代表内容正确** —— 会员曲目能取到链接但内容是 60s 试听，
      * 也有音源把 320k mp3 标成 flac24bit。这些都只有拿到响应头/文件才暴露，
@@ -1426,6 +1427,10 @@ async function processTask(task: DownloadTaskRow) {
     let plannedPath = ''
     let temp = ''
     let downloaded = false
+    /** 本轮因「内容不是音频」被排除的组合数 —— 用于给最终错误挑准确的文案 */
+    let invalidContentCount = 0
+    /** ffprobe 不可用的告警只打一次，避免逐个候选刷日志 */
+    let warnedProbeUnavailable = false
 
     // ── 阶段 1：收集候选并探测（每个候选只读响应头，不下载内容）──
     type Candidate = {
@@ -1600,7 +1605,50 @@ async function processTask(task: DownloadTaskRow) {
         }
 
         // 试听检测 + L3：一次 ffprobe 同时拿时长与真实参数（位深/采样率/声道），不额外 spawn
-        const info = await probeAudioInfo(temp)
+        const probe = await probeAudioContent(temp)
+        const info = probe.kind === 'ok' ? probe.info : null
+
+        // ★ 内容硬校验：**只在拿到明确否定证据时拒**，绝不把「判断不了」当成「不是音频」。
+        //
+        // 背景：音源偶尔返回的不是音频，而是 HTML 落地页 / 校验页（直链过期、CDN 拦截），
+        // 旧逻辑两道校验都是「不认识就放行」—— sniffAudioExt 对 HTML 返回 null，
+        // isLosslessClaimMismatch 见 null 直接 return false；ffprobe 对 HTML 也拿不到
+        // 任何字段，`if (actual != null)` 把试听/时长检测整段跳过 ——
+        // 于是网页被 rename 成 .mp3 落盘，曲库混入伪音频（issue #45）。
+        //
+        // 但 ffmpeg 在本项目是**可选依赖**（packaging/fnos/miyin/cmd/install_init 只告警不拦截）。
+        // 缺 ffprobe 时「魔数认不出 + ffprobe 也认不出」会同时成立，若据此硬拒，
+        // 没装 ffmpeg 的机器连正常音频都下不到 —— 等于把一个元数据工具升级成下载硬门槛。
+        //
+        // 因此按探测结论分两种：
+        //   · not-audio   —— ffprobe 跑通了却没有音频流，属明确否定证据 ⇒ 拒
+        //   · unavailable —— ffprobe 没跑起来，没有任何结论 ⇒ 退回「内容自证」兜底：
+        //                    文本载荷（HTML/XML/JSON/纯文本）一定不是音频 ⇒ 拒；
+        //                    其余未知二进制放行（与旧版本降级行为一致，不扩大拒绝面）
+        if (!sniffed && !info) {
+          let invalidReason: string | null = null
+          if (probe.kind === 'not-audio') {
+            invalidReason = 'ffprobe 未解析出音频流'
+          } else {
+            const textual = sniffTextualPayload(temp)
+            if (textual) {
+              invalidReason = `内容是 ${textual} 文本而非音频`
+            } else if (!warnedProbeUnavailable) {
+              warnedProbeUnavailable = true
+              console.warn(
+                `[download] ${task.title}: 未检测到可用的 ffprobe，跳过真实格式/时长校验并放行；` +
+                  '建议在系统中安装 ffmpeg 以启用试听片段识别与位深修正',
+              )
+            }
+          }
+          if (invalidReason) {
+            const err = new Error(
+              `内容不是可识别的音频（${invalidReason}，${cand.sourceId.slice(0, 8)}）`,
+            ) as Error & { code?: string }
+            err.code = 'INVALID_CONTENT'
+            throw err
+          }
+        }
         const actual = info?.durationSec ?? null
         if (actual != null) {
           if (expectedDuration && expectedDuration > 0 && isLikelyPreviewClip(actual, expectedDuration)) {
@@ -1632,12 +1680,20 @@ async function processTask(task: DownloadTaskRow) {
         }
       } catch (err: unknown) {
         const code = String((err as { code?: string })?.code)
-        if (code !== 'PREVIEW_CLIP' && code !== 'QUALITY_MISMATCH') throw err
+        if (code !== 'PREVIEW_CLIP' && code !== 'QUALITY_MISMATCH' && code !== 'INVALID_CONTENT') {
+          throw err
+        }
         previewBlocked.add(key)
+        if (code === 'INVALID_CONTENT') invalidContentCount++
         recordSourceOutcome({
           sourceId: cand.sourceId,
           platform: task.platform,
-          outcome: code === 'QUALITY_MISMATCH' ? 'quality-lie' : 'preview',
+          outcome:
+            code === 'QUALITY_MISMATCH'
+              ? 'quality-lie'
+              : code === 'INVALID_CONTENT'
+                ? 'invalid-content'
+                : 'preview',
         })
         removeFileQuiet(temp)
         tempPath = null
@@ -1665,6 +1721,12 @@ async function processTask(task: DownloadTaskRow) {
     if (!downloaded) {
       // 把已排除的组合持久化，手动重试可以从断点继续而不是重头再来
       persistPreviewBlocked(task.id, musicInfo, previewBlocked)
+      // 本轮排除的全是「内容不是音频」时，错误文案要说清是内容问题（直链失效 / 被 CDN 拦了），
+      // 而不是笼统地说「只返回试听片段」—— 两者的处置完全不同
+      const excludedThisRun = previewBlocked.size - blockedAtStart
+      if (invalidContentCount > 0 && invalidContentCount === excludedThisRun) {
+        throw allInvalidContentError(previewBlocked.size)
+      }
       throw allPreviewError(previewBlocked.size, listed.truncated)
     }
 

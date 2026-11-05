@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, getDb } from '../server/utils/db'
 import { buildDedupKey, buildSearchText } from '#shared/trackKey'
-import { probeAudioInfo } from '../server/utils/audioPreview'
+import { probeAudioContent } from '../server/utils/audioPreview'
 import { saveSettings } from '../server/services/settingsService'
 
 /** 受控候选池：模拟取链层能拿到的「音源@档位 → URL」 */
@@ -89,7 +89,7 @@ vi.mock('../server/services/metadataService', () => ({
 // 时长/位深探测依赖 ffprobe；假音频没有真实参数 → 连探测函数一起覆盖（保持测试封闭）
 vi.mock('../server/utils/audioPreview', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server/utils/audioPreview')>()
-  return { ...actual, probeAudioInfo: vi.fn(async () => null) }
+  return { ...actual, probeAudioContent: vi.fn(async () => ({ kind: 'not-audio' as const })) }
 })
 
 import { getTask, retryTask, tickWorker } from '../server/services/downloadQueue'
@@ -134,8 +134,8 @@ describe('候选择优：落到实测质量最好的音源', () => {
     upstream.pool = []
     upstream.calls = []
     // 默认探测失败（假音频没有真实参数）；需要位深的用例自行 mockResolvedValueOnce
-    vi.mocked(probeAudioInfo).mockReset()
-    vi.mocked(probeAudioInfo).mockResolvedValue(null)
+    vi.mocked(probeAudioContent).mockReset()
+    vi.mocked(probeAudioContent).mockResolvedValue({ kind: 'not-audio' })
 
     const db = getDb()
     const insertSource = db.prepare(
@@ -319,12 +319,15 @@ describe('候选择优：落到实测质量最好的音源', () => {
     saveSettings({ nameTemplate: '{artist} - {title} [{quality}]' })
     // 12MB/60s ≈ 1677kbps → 对 flac24bit 判为 ok，于是 quality 会保持声称值进入 L3
     // 内容用 fLaC 魔数（不是 mp3），避免被 L2 先拦下
-    vi.mocked(probeAudioInfo).mockResolvedValueOnce({
-      durationSec: null,
-      codec: 'flac',
-      sampleRate: 44100,
-      bitsPerRawSample: 16,
-      channels: 6,
+    vi.mocked(probeAudioContent).mockResolvedValueOnce({
+      kind: 'ok',
+      info: {
+        durationSec: null,
+        codec: 'flac',
+        sampleRate: 44100,
+        bitsPerRawSample: 16,
+        channels: 6,
+      },
     })
     upstream.pool = [{ sourceId: 'src-a', quality: 'flac24bit', url: `${baseUrl}/hires-flac.flac` }]
 
@@ -346,12 +349,15 @@ describe('候选择优：落到实测质量最好的音源', () => {
 
   it('L3：实测确实是 24bit → 档位与文件名都保持 flac24bit（不该被误降）', async () => {
     saveSettings({ nameTemplate: '{artist} - {title} [{quality}]' })
-    vi.mocked(probeAudioInfo).mockResolvedValueOnce({
-      durationSec: null,
-      codec: 'flac',
-      sampleRate: 96000,
-      bitsPerRawSample: 24,
-      channels: 2,
+    vi.mocked(probeAudioContent).mockResolvedValueOnce({
+      kind: 'ok',
+      info: {
+        durationSec: null,
+        codec: 'flac',
+        sampleRate: 96000,
+        bitsPerRawSample: 24,
+        channels: 2,
+      },
     })
     upstream.pool = [{ sourceId: 'src-a', quality: 'flac24bit', url: `${baseUrl}/hires-flac.flac` }]
 
