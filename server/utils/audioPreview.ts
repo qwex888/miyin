@@ -118,6 +118,25 @@ export function parseFfprobeAudioInfo(stdout: string): AudioProbeInfo {
 }
 
 /**
+ * ffprobe 探测的三种结论。
+ *
+ * 三者必须分开，否则调用方无法区分「文件不是音频」和「我判断不了」：
+ *
+ * - `ok`          —— 解析出了音频流，可信
+ * - `not-audio`   —— ffprobe **跑通了**，但一个音频字段都没有 ⇒ 明确否定
+ * - `unavailable` —— ffprobe **没跑起来**（未安装 / 权限 / 资源耗尽 / 文件读不到）
+ *                    ⇒ 没有任何结论，调用方不得据此判定内容无效
+ *
+ * `unavailable` 单独成一态的原因：ffmpeg 在本项目是**可选依赖**
+ * （`packaging/fnos/miyin/cmd/install_init` 只告警不拦截）。把这一态混进
+ * `not-audio`，等于让「没装 ffmpeg」变成「所有内容都不是音频」。
+ */
+export type AudioProbeOutcome =
+  | { kind: 'ok'; info: AudioProbeInfo }
+  | { kind: 'not-audio' }
+  | { kind: 'unavailable' }
+
+/**
  * 一次 ffprobe 同时拿到时长与真实参数（位深 / 采样率 / 声道 / 容器）。
  *
  * **必须带 `-select_streams a:0`** —— 否则封面图（mjpeg）流会混进输出，
@@ -126,8 +145,8 @@ export function parseFfprobeAudioInfo(stdout: string): AudioProbeInfo {
  * 相比"只取 duration"的查法，实测耗时与内存完全一致（ffprobe 只读文件头、不解码音频），
  * 所以要位深参数不必付出额外代价。
  */
-export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null> {
-  if (!existsSync(filePath)) return Promise.resolve(null)
+export function probeAudioContent(filePath: string): Promise<AudioProbeOutcome> {
+  if (!existsSync(filePath)) return Promise.resolve({ kind: 'unavailable' })
   return new Promise((resolve) => {
     const p = spawn(
       'ffprobe',
@@ -150,13 +169,28 @@ export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null>
     p.stdout?.on('data', (c) => {
       out += String(c)
     })
-    p.on('error', () => resolve(null))
+    // spawn 失败（ffprobe 未安装 → ENOENT、权限不足、资源耗尽）⇒ 判断不了，不是「不是音频」
+    p.on('error', () => resolve({ kind: 'unavailable' }))
     p.on('close', () => {
       const info = parseFfprobeAudioInfo(out)
-      // 一个字段都没解析到 → 视为探测失败
-      resolve(info.durationSec == null && info.codec == null ? null : info)
+      // 一个字段都没解析到 → ffprobe 确实看过了但没找到音频流
+      resolve(
+        info.durationSec == null && info.codec == null
+          ? { kind: 'not-audio' }
+          : { kind: 'ok', info },
+      )
     })
   })
+}
+
+/**
+ * 兼容包装：只要「能拿到的参数」时用。
+ *
+ * ⚠️ 它会把 `not-audio` 与 `unavailable` 一起折叠成 `null`，
+ * 因此**不能**用它判断「内容是不是音频」——那种场景必须用 `probeAudioContent`。
+ */
+export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null> {
+  return probeAudioContent(filePath).then((r) => (r.kind === 'ok' ? r.info : null))
 }
 
 /** 只要时长时的薄封装（复用同一次 probe，不额外 spawn） */

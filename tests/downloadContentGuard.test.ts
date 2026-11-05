@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { closeDb, getDb } from '../server/utils/db'
 import { buildDedupKey, buildSearchText } from '#shared/trackKey'
-import { probeAudioInfo } from '../server/utils/audioPreview'
+import { probeAudioContent } from '../server/utils/audioPreview'
 
 /** 受控候选池：模拟取链层能拿到的「音源@档位 → URL」 */
 const upstream = vi.hoisted(() => ({
@@ -53,11 +53,13 @@ vi.mock('../server/services/metadataService', () => ({
   writeAudioMetadata: vi.fn(async () => ({ ok: true })),
 }))
 
-// 时长/位深探测依赖 ffprobe；HTML 不是音频 → ffprobe 解析不出任何字段 → null。
-// 这里显式覆盖，保证用例不依赖本机是否装了 ffprobe。
+// 时长/位深探测依赖 ffprobe。这里显式覆盖，保证用例不依赖本机是否装了 ffprobe。
+//
+// ⚠️ 默认给 'not-audio'（ffprobe 跑过、没有音频流），而不是笼统的 null：
+// 后者会把「判断不了」和「不是音频」混成一件事，正是 issue #45 修复引入的盲区。
 vi.mock('../server/utils/audioPreview', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server/utils/audioPreview')>()
-  return { ...actual, probeAudioInfo: vi.fn(async () => null) }
+  return { ...actual, probeAudioContent: vi.fn(async () => ({ kind: 'not-audio' as const })) }
 })
 
 import { getTask, tickWorker } from '../server/services/downloadQueue'
@@ -97,8 +99,8 @@ describe('下载内容硬校验：HTML 落地页不得落盘（issue #45）', ()
     downloadDir = mkdtempSync(join(tmpdir(), 'miyin-html-dl-'))
     process.env.DOWNLOAD_DIR = downloadDir
     upstream.pool = []
-    vi.mocked(probeAudioInfo).mockReset()
-    vi.mocked(probeAudioInfo).mockResolvedValue(null)
+    vi.mocked(probeAudioContent).mockReset()
+    vi.mocked(probeAudioContent).mockResolvedValue({ kind: 'not-audio' })
 
     getDb()
       .prepare(
