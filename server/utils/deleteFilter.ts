@@ -15,11 +15,13 @@ function badRequest(message: string): BadRequestError {
 }
 
 /**
- * 删除接口的筛选条件解析。
+ * 批量操作的筛选条件解析（删除 / 取消 / 重试 / 换音质 / 换源共用）。
  *
  * 查询接口对非法条件可以 fail-open（少筛几条，列表会显示出来），
- * 但删除接口 fail-open 会退化成「整个分类全删」—— 所以这里一律 fail-closed：
- * 未知字段、非字符串、空白串、非法日期都直接 400，宁可拒绝也不扩大删除范围。
+ * 但批量操作 fail-open 会把「操作筛选结果」放大成「操作整个分类」：
+ * 删除会把别的音质连文件一起删掉，取消会把没看见的任务全停掉。
+ * 所以这里一律 fail-closed：未知字段、非字符串、空白串、非法日期
+ * 都直接 400，宁可拒绝也不扩大作用域。
  */
 const FIELD_MAP: Record<string, keyof TaskListFilter> = {
   playlist_url: 'playlistUrl',
@@ -55,7 +57,7 @@ export function parseDeleteFilter(raw: unknown): TaskListFilter {
       throw badRequest(`未知筛选字段: ${key}`)
     }
     if (value === undefined || value === null) continue
-    // 空串在删除路径上同样视为非法：静默忽略会让 WHERE 退化成整个分类
+    // 空串一律非法：静默忽略会让 WHERE 退化成整个分类
     if (typeof value !== 'string' || !value.trim()) {
       throw badRequest(`筛选字段 ${key} 必须是非空字符串`)
     }
@@ -67,6 +69,12 @@ export function parseDeleteFilter(raw: unknown): TaskListFilter {
   }
   return filter
 }
+
+/**
+ * 批量操作筛选解析的统一入口。删除路径保留 `parseDeleteFilter` 这个名字，
+ * 取消 / 重试 / 换音质 / 换源用这个别名 —— 两边是同一份实现，不允许分叉。
+ */
+export const parseTaskFilter = parseDeleteFilter
 
 export type DeleteTab = 'completed' | 'failed'
 
