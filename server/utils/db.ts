@@ -124,7 +124,65 @@ CREATE TABLE IF NOT EXISTS source_stats (
     db.exec(`ALTER TABLE source_stats ADD COLUMN invalid_contents INTEGER NOT NULL DEFAULT 0`)
   }
 
+  migrateTaskStats(db)
   migrateDedupKeyVersion(db)
+}
+
+/**
+ * 任务状态计数表（tab 角标 / 首页统计的默认数据源）。
+ *
+ * 直接用 `SELECT status, count(*) ... GROUP BY status` 在带索引时也是一次
+ * 全索引扫描；而前端在每次下载事件后 800ms debounce 就要重拉一次统计，
+ * 形成「越下载越卡、库越大越卡」的正反馈。
+ *
+ * 这里改用常量表 + **触发器**维护：不把 ±1 散布到各调用点，是因为状态写入
+ * 有 6 条以上路径（入队、CAS 迁移、取消、重试、批量删除、启动期 running→queued
+ * 复位），漏一处就会长期偏差且无人察觉；触发器由 SQLite 保证「主表怎么写都算数」，
+ * 连外部 sqlite3 手工删除也能同步。
+ *
+ * 触发器只在 `UPDATE OF status` 且值真的变化时触发，进度更新（不含 status 列）
+ * 不产生任何额外写入 —— 热路径零开销。
+ */
+function migrateTaskStats(db: Database.Database) {
+  const existed = !!db
+    .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'task_stats'`)
+    .get()
+
+  db.exec(`
+CREATE TABLE IF NOT EXISTS task_stats (
+  status TEXT PRIMARY KEY,
+  n      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_task_stats_insert AFTER INSERT ON download_tasks
+BEGIN
+  INSERT INTO task_stats (status, n) VALUES (NEW.status, 1)
+    ON CONFLICT(status) DO UPDATE SET n = n + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_stats_delete AFTER DELETE ON download_tasks
+BEGIN
+  UPDATE task_stats SET n = MAX(n - 1, 0) WHERE status = OLD.status;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_task_stats_status AFTER UPDATE OF status ON download_tasks
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+  UPDATE task_stats SET n = MAX(n - 1, 0) WHERE status = OLD.status;
+  INSERT INTO task_stats (status, n) VALUES (NEW.status, 1)
+    ON CONFLICT(status) DO UPDATE SET n = n + 1;
+END;
+`)
+
+  // 首次建表：按现有数据回填一次。之后由触发器接管，无需再扫全表。
+  if (!existed) {
+    db.exec(`INSERT INTO task_stats (status, n) SELECT status, count(*) FROM download_tasks GROUP BY status`)
+  }
+  // 补齐五个状态行（即使当前为 0），让读取侧不必处理缺失键
+  db.exec(
+    `INSERT OR IGNORE INTO task_stats (status, n) VALUES
+       ('queued', 0), ('running', 0), ('completed', 0), ('failed', 0), ('cancelled', 0)`,
+  )
 }
 
 /**

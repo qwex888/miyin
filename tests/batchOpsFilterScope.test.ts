@@ -61,10 +61,14 @@ describe('批量操作按筛选条件限定作用域', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'miyin-batch-filter-'))
     process.env.DATA_DIR = tmpDir
     process.env.DOWNLOAD_DIR = tmpDir
+    // 批量操作已改为分块异步：`await` 期间真实 worker 会取走 queued 任务并联网失败，
+    // 断言就变成时序竞态。本文件只验证作用域，关掉自动唤醒。
+    process.env.MIYIN_DISABLE_WORKER = '1'
     closeDb()
   })
 
   afterEach(() => {
+    delete process.env.MIYIN_DISABLE_WORKER
     closeDb()
     try {
       rmSync(tmpDir, { recursive: true, force: true })
@@ -73,45 +77,45 @@ describe('批量操作按筛选条件限定作用域', () => {
     }
   })
 
-  it('取消：带音质筛选时只取消筛选内的运行中任务', () => {
+  it('取消：带音质筛选时只取消筛选内的运行中任务', async () => {
     seedTask({ id: 'run-128', status: 'running', quality: '128k' })
     seedTask({ id: 'run-320', status: 'running', quality: '320k' })
     seedTask({ id: 'run-128b', status: 'running', quality: '128k' })
 
-    const res = batchCancelTasks(undefined, { tab: 'running', filter: { quality: '128k' } })
+    const res = await batchCancelTasks(undefined, { tab: 'running', filter: { quality: '128k' } })
     expect(res.count).toBe(2)
 
     const remaining = listTasks({ tab: 'running' })
     expect(remaining.map((t) => t.id)).toEqual(['run-320'])
   })
 
-  it('取消：不带筛选时保持原行为（整个分类）', () => {
+  it('取消：不带筛选时保持原行为（整个分类）', async () => {
     seedTask({ id: 'run-1', status: 'running', quality: '128k' })
     seedTask({ id: 'run-2', status: 'running', quality: '320k' })
     seedTask({ id: 'queued-1', status: 'queued', quality: 'flac' })
 
-    const res = batchCancelTasks(undefined, { tab: 'running' })
+    const res = await batchCancelTasks(undefined, { tab: 'running' })
     expect(res.count).toBe(3)
     expect(listTasks({ tab: 'running' })).toHaveLength(0)
   })
 
-  it('重试：带平台筛选时只重试该平台', () => {
+  it('重试：带平台筛选时只重试该平台', async () => {
     seedTask({ id: 'f-wy', status: 'failed', platform: 'wy' })
     seedTask({ id: 'f-tx', status: 'failed', platform: 'tx' })
     seedTask({ id: 'f-tx2', status: 'failed', platform: 'tx' })
 
-    const res = batchRetryTasks(undefined, { tab: 'failed', filter: { platform: 'tx' } })
+    const res = await batchRetryTasks(undefined, { tab: 'failed', filter: { platform: 'tx' } })
     expect(res.count).toBe(2)
     // 未命中的 wy 任务仍是 failed
     expect(listTasks({ tab: 'failed' }).map((t) => t.id)).toEqual(['f-wy'])
   })
 
-  it('重试：关键词与日期区间同时生效', () => {
+  it('重试：关键词与日期区间同时生效', async () => {
     seedTask({ id: 'old-hit', status: 'failed', title: '渡口 live', createdAt: '2026-10-01T00:00:00.000Z' })
     seedTask({ id: 'new-hit', status: 'failed', title: '渡口 现场', createdAt: '2026-11-03T00:00:00.000Z' })
     seedTask({ id: 'new-miss', status: 'failed', title: '稻香', createdAt: '2026-11-03T00:00:00.000Z' })
 
-    const res = batchRetryTasks(undefined, {
+    const res = await batchRetryTasks(undefined, {
       tab: 'failed',
       filter: { q: '渡口', since: '2026-11-01', until: '2026-11-30' },
     })
@@ -119,11 +123,11 @@ describe('批量操作按筛选条件限定作用域', () => {
     expect(listTasks({ tab: 'failed' }).map((t) => t.id).sort()).toEqual(['new-miss', 'old-hit'])
   })
 
-  it('显式传入 ids 时，filter 不参与（以 ids 为准）', () => {
+  it('显式传入 ids 时，filter 不参与（以 ids 为准）', async () => {
     seedTask({ id: 'a', status: 'running', quality: '128k' })
     seedTask({ id: 'b', status: 'running', quality: '320k' })
 
-    const res = batchCancelTasks(['b'], { tab: 'running', filter: { quality: '128k' } })
+    const res = await batchCancelTasks(['b'], { tab: 'running', filter: { quality: '128k' } })
     expect(res.count).toBe(1)
     expect(listTasks({ tab: 'running' }).map((t) => t.id)).toEqual(['a'])
   })
