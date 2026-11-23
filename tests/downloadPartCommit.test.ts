@@ -71,7 +71,7 @@ vi.mock('../server/services/metadataService', () => ({
 // 试听时长与位深探测依赖 ffprobe，且测试用的假音频没有真实参数 → 覆盖探测函数（保持封闭）
 vi.mock('../server/utils/audioPreview', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../server/utils/audioPreview')>()
-  return { ...actual, probeAudioInfo: vi.fn(async () => null) }
+  return { ...actual, probeAudioContent: vi.fn(async () => ({ kind: 'not-audio' as const })) }
 })
 
 import { enqueueDownload, getTask, cancelTask, tickWorker } from '../server/services/downloadQueue'
