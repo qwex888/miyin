@@ -7,15 +7,29 @@ import { sniffAudioExt } from '../utils/audioSniff'
 
 let ffmpegAvailable: boolean | null = null
 
+/**
+ * 子进程超时：ffmpeg / ffprobe 在**网络挂载（SMB/NFS）或损坏文件**上可能永久阻塞，
+ * 而 `processTask` 是 `await` 它的 —— 没有超时等于把一个并发槽交给一个不会返回的
+ * promise，整个下载队列从此少一个槽位，重启才能恢复。
+ *
+ * 超时只 kill，不重试：调用方拿到的结果要么是「判断不了」（probe 的 unavailable），
+ * 要么是普通失败（元数据写入是可选的，失败只打日志）。
+ */
+const FFMPEG_TIMEOUT_MS = Number(process.env.MIYIN_FFMPEG_TIMEOUT_MS || 30000)
+const FFPROBE_TIMEOUT_MS = Number(process.env.MIYIN_FFPROBE_TIMEOUT_MS || 15000)
+
 export function checkFfmpegAvailable(): Promise<boolean> {
   if (ffmpegAvailable != null) return Promise.resolve(ffmpegAvailable)
   return new Promise((resolve) => {
     const p = spawn('ffmpeg', ['-version'], { stdio: 'ignore' })
+    const timer = setTimeout(() => p.kill('SIGKILL'), FFPROBE_TIMEOUT_MS)
     p.on('error', () => {
+      clearTimeout(timer)
       ffmpegAvailable = false
       resolve(false)
     })
     p.on('close', (code) => {
+      clearTimeout(timer)
       ffmpegAvailable = code === 0
       resolve(ffmpegAvailable)
     })
@@ -40,12 +54,23 @@ function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const p = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
     let err = ''
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      p.kill('SIGKILL')
+    }, FFMPEG_TIMEOUT_MS)
     p.stderr?.on('data', (c) => {
-      err += String(c)
+      // 只留尾部：ffmpeg 的进度输出可能很长，全量拼接在长任务上会持续涨内存
+      err = (err + String(c)).slice(-2000)
     })
-    p.on('error', reject)
+    p.on('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
     p.on('close', (code) => {
-      if (code === 0) resolve()
+      clearTimeout(timer)
+      if (timedOut) reject(new Error(`ffmpeg 超时 ${FFMPEG_TIMEOUT_MS}ms`))
+      else if (code === 0) resolve()
       else reject(new Error(err.slice(-800) || `ffmpeg exit ${code}`))
     })
   })
