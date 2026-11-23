@@ -382,6 +382,18 @@ function resetSearchPaging() {
 
 async function doSearch() {
   if (!keyword.value.trim()) return
+  /**
+   * 整专下载 / 批量入队在跑时不受理搜索。
+   *
+   * `loading` 是页面级共享 ref：入队期间这里把文案改成「搜索中…」后，第 999 行
+   * `:cancelable="Boolean(albumEnqueueAbort)"` 的取消按钮仍挂着，点它会中止整专；
+   * 而搜索自己的 `finally` 又会把整专的遮罩一起关掉（反过来整专的 finally 也会
+   * 关掉搜索的遮罩）。与其让两个场景抢同一个遮罩，不如在入口挡住。
+   */
+  if (downloading.value) {
+    toast.info('当前有下载任务在运行，请先取消或等它完成')
+    return
+  }
   const gen = ++searchGen
   resetAlbumView()
   resetSearchPaging()
@@ -825,6 +837,67 @@ async function enqueueAlbumTracks(indices: number[]) {
 }
 
 /**
+ * 整专下载的取消入口（与歌单导入页同一模式，Issue #43）：
+ * 流式任务进行中可随时中止，避免匹配/拉取卡住时只能干等或刷新页面。
+ */
+const albumEnqueueAbort = ref<AbortController | null>(null)
+const albumEnqueueCancelText = ref('取消拉取')
+
+/**
+ * 停滞看门狗（Issue #43 第三条根因）。
+ *
+ * 上游某个接口既不返回也不报错、或浏览器到 NAS 的连接半开时，NDJSON 流既不会
+ * 结束也不会有新事件，界面就无限转圈。用户虽然能手动点取消，但分不清「慢」和
+ * 「死」——这正是 #43 里「没有超时，也没有错误提示」的那一段。
+ * 连续 `ALBUM_ENQUEUE_STALL_MS` 没有任何事件就自动中止，并把原因写进提示。
+ */
+const ALBUM_ENQUEUE_STALL_MS = 180_000
+const ALBUM_ENQUEUE_WATCH_INTERVAL_MS = 15_000
+let albumEnqueueStallTimer: ReturnType<typeof setInterval> | null = null
+let albumEnqueueLastEventAt = 0
+
+function stopAlbumEnqueueWatchdog() {
+  if (albumEnqueueStallTimer) clearInterval(albumEnqueueStallTimer)
+  albumEnqueueStallTimer = null
+}
+
+function startAlbumEnqueueWatchdog(controller: AbortController) {
+  stopAlbumEnqueueWatchdog()
+  albumEnqueueLastEventAt = Date.now()
+  albumEnqueueStallTimer = setInterval(() => {
+    if (controller.signal.aborted) {
+      stopAlbumEnqueueWatchdog()
+      return
+    }
+    if (Date.now() - albumEnqueueLastEventAt < ALBUM_ENQUEUE_STALL_MS) return
+    stopAlbumEnqueueWatchdog()
+    controller.abort()
+    if (albumEnqueueAbort.value === controller) albumEnqueueAbort.value = null
+    loading.value = false
+    toast.warning(
+      `超过 ${ALBUM_ENQUEUE_STALL_MS / 1000} 秒没有收到进度，已停止继续入队（已入队的曲目会照常下载）`,
+    )
+  }, ALBUM_ENQUEUE_WATCH_INTERVAL_MS)
+}
+
+/** 任何一个流事件都算「还活着」 */
+function touchAlbumEnqueue() {
+  albumEnqueueLastEventAt = Date.now()
+}
+
+function cancelAlbumEnqueue() {
+  // 遮罩淡出（150ms）期间按钮仍可点；没有这层守卫时第二次点击会重复报「已停止」，
+  // 整专刚成功、遮罩正在淡出的那一瞬点击也会误报。
+  if (!albumEnqueueAbort.value) return
+  albumEnqueueAbort.value.abort()
+  albumEnqueueAbort.value = null
+  stopAlbumEnqueueWatchdog()
+  loading.value = false
+  // 取消只停止「继续入队」，已经入队的那批会照常下完，原文案名不副实
+  toast.info('已停止继续入队，已入队的曲目会照常下载')
+}
+
+/**
  * 整专下载（Issue #40）：不依赖已加载的曲目 —— 服务端按游标自己翻页拉全 + 入队，
  * 前端只消费 NDJSON 进度。2637 集的专辑也不会撑爆首屏或详情响应。
  */
@@ -835,6 +908,10 @@ async function enqueueWholeAlbum() {
   downloading.value = true
   loading.value = true
   loadingText.value = '拉取专辑曲目…'
+  albumEnqueueCancelText.value = '取消拉取'
+  const abortController = new AbortController()
+  albumEnqueueAbort.value = abortController
+  startAlbumEnqueueWatchdog(abortController)
   try {
     const res = await fetchAlbumEnqueueAllNdjson(
       {
@@ -850,15 +927,22 @@ async function enqueueWholeAlbum() {
         albumFolderTemplate: albumFolderTemplate.value.trim() || '{album}',
       },
       {
+        signal: abortController.signal,
         onStart: (total, stage) => {
-          if (stage === 'matching') loadingText.value = `入队中…（共 ${total} 集）`
+          touchAlbumEnqueue()
+          if (stage === 'matching') {
+            loadingText.value = `入队中…（共 ${total} 集）`
+            albumEnqueueCancelText.value = '取消下载'
+          }
         },
         onFetchProgress: (e) => {
+          touchAlbumEnqueue()
           loadingText.value = e.total
             ? `拉取专辑曲目 ${e.index}/${e.total}`
             : `拉取专辑曲目 ${e.index}`
         },
         onProgress: (e) => {
+          touchAlbumEnqueue()
           loadingText.value = `入队中 ${e.index}/${e.total}`
         },
       },
@@ -870,8 +954,12 @@ async function enqueueWholeAlbum() {
     useDownloadBadge().notifyChanged()
     void refreshAlbumLibraryKeys()
   } catch (e: unknown) {
+    const err = e as { name?: string }
+    if (err?.name === 'AbortError' || abortController.signal.aborted) return
     toast.error(apiErrorMessage(e, '整专下载失败'))
   } finally {
+    if (albumEnqueueAbort.value === abortController) albumEnqueueAbort.value = null
+    stopAlbumEnqueueWatchdog()
     downloading.value = false
     loading.value = false
   }
@@ -967,7 +1055,13 @@ async function retryFailedEnqueue() {
 
 <template>
   <div class="page page-home">
-    <PageLoading :show="loading" :text="loadingText" />
+    <PageLoading
+      :show="loading"
+      :text="loadingText"
+      :cancelable="Boolean(albumEnqueueAbort)"
+      :cancel-text="albumEnqueueCancelText"
+      @cancel="cancelAlbumEnqueue"
+    />
     <FnOsDirAuthDialog
       :open="showFnOsAuthDialog"
       @authorize="goFnOsAuthorize"

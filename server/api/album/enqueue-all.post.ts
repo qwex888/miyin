@@ -201,6 +201,13 @@ export default defineEventHandler(async (event) => {
     }
   })()
 
-  void run
+  /**
+   * 用户取消后连接已断，`stream.send` 可能 reject。这里兜一层，避免整个进程
+   * 冒出 unhandled rejection 噪音；真正的错误此前已经通过 NDJSON 的 error 事件
+   * 发过，客户端也已经断开，没有第二处可投递。
+   */
+  void run.catch((e) => {
+    console.warn('[album-enqueue] 流写入失败（客户端可能已取消）:', (e as Error)?.message || e)
+  })
   return stream.response
 })
