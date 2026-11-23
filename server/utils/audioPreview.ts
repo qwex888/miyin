@@ -222,13 +222,77 @@ export function previewSizeError(contentLength: number, expectedSec: number): Er
  *
  * 与 allPreviewError 分开：症状不同（音源返回的是网页/坏文件，不是试听片段），
  * 提示也不同（多半是直链过期或被 CDN 拦了，换源重试前先看音源可用性）。
+ *
+ * `hasMore` 与 allPreviewError 同义：`true` 表示还有组合没探查，重试能接着往下走。
+ * 少了这个参数时，用户会以为"全部源都试过了"，而实际上探测预算只覆盖了
+ * "每个音源各试它的最高档"这一轮（`PROBE_COMBO_CAP` 见 downloadQueue）。
  */
-export function allInvalidContentError(tried: number): Error {
+export function allInvalidContentError(tried: number, hasMore: boolean): Error {
+  const tail = hasMore
+    ? '，可点「重试」继续尝试其余音源'
+    : ''
   const err = new Error(
-    `已试过 ${tried} 个音源/音质组合，均未返回可识别的音频内容（音源可能返回了错误页或文件已损坏）`,
+    `已试过 ${tried} 个音源/音质组合，均未返回可识别的音频内容（音源可能返回了错误页或文件已损坏）${tail}`,
   )
   ;(err as any).code = 'INVALID_CONTENT'
+  ;(err as any).hasMore = hasMore
   return err
+}
+
+/**
+ * 部分音源返回试听、部分返回非音频内容 —— 混合场景的收尾错误。
+ *
+ * 为什么不能按「本轮是否出现过坏内容」二选一：
+ * - 只要有坏内容就报「均未返回可识别的音频内容」→「均」字是假的，
+ *   多数候选其实只是试听，用户会被引向「重试/换源」，而真正该做的是查会员。
+ * - 只有全是坏内容才报 → 退化成「均只返回试听片段」，
+ *   用户跑去查会员权限，实际是音源直链失效 —— 两类问题的处置完全相反。
+ *
+ * 所以混合场景如实给出两边的数量，让用户自己判断先试哪条路。
+ */
+export function allMixedContentError(
+  previewCount: number,
+  invalidCount: number,
+  hasMore: boolean,
+): Error {
+  const tail = hasMore ? '，可点「重试」继续尝试其余音源' : ''
+  const err = new Error(
+    `已试过 ${previewCount + invalidCount} 个音源/音质组合：` +
+      `${previewCount} 个只返回试听片段，${invalidCount} 个未返回可识别的音频内容${tail}` +
+      `（后者多半是音源返回了错误页或文件已损坏）`,
+  )
+  ;(err as any).code = 'INVALID_CONTENT'
+  ;(err as any).hasMore = hasMore
+  return err
+}
+
+/** 排除原因 —— 收尾文案与重试判定都要据此分支（试听与内容坏的处置方向相反） */
+export type BlockedReason = 'preview' | 'invalid' | 'quality-lie'
+
+/**
+ * 按「已排除项的实际原因」挑收尾错误。
+ *
+ * 阶段 1（一个候选都没攒到）与阶段 2（候选都下载失败）**共用**同一判定 ——
+ * 这是这一版必须补的一半：只改阶段 2 时，重试第二轮会因为阶段 1 仍抛
+ * `allPreviewError` 而把「内容坏」漂移成「试听」，用户两轮拿到相反的归因，
+ * 且 `PREVIEW_CLIP` 是无条件可重试的，会一路空转到 maxAttempts。
+ *
+ * 没有原因记录的历史 key（本字段引入前写入的）按 preview 计 —— 那些记录
+ * 本来就只可能是试听/谎报，语义对得上。
+ */
+export function blockedOutcomeError(
+  blocked: ReadonlySet<string>,
+  reasons: Readonly<Record<string, BlockedReason | undefined>>,
+  hasMore: boolean,
+): Error {
+  let invalid = 0
+  for (const key of blocked) {
+    if (reasons[key] === 'invalid') invalid++
+  }
+  const tried = blocked.size
+  if (invalid === 0) return allPreviewError(tried, hasMore)
+  if (invalid === tried) return allInvalidContentError(tried, hasMore)
+  return allMixedContentError(tried - invalid, invalid, hasMore)
 }
 
 /**

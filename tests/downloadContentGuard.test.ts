@@ -10,6 +10,8 @@ import { probeAudioContent } from '../server/utils/audioPreview'
 /** 受控候选池：模拟取链层能拿到的「音源@档位 → URL」 */
 const upstream = vi.hoisted(() => ({
   pool: [] as Array<{ sourceId: string; quality: string; url: string }>,
+  /** 模拟「还有组合没探查」（真实实现里由 limit / onCandidate 提前收工置位） */
+  hasMore: false,
 }))
 
 vi.mock('../server/services/musicUrlResolve', () => ({
@@ -42,7 +44,8 @@ vi.mock('../server/services/musicUrlResolve', () => ({
         errors: [],
         loadedCount: out.length,
         excludedSkips: upstream.pool.length - available.length,
-        truncated: false,
+        // 与真实实现同义：只有「还没被排除掉的组合」才谈得上没探查完
+        truncated: upstream.hasMore && available.length > 0,
       }
     },
   ),
@@ -99,6 +102,7 @@ describe('下载内容硬校验：HTML 落地页不得落盘（issue #45）', ()
     downloadDir = mkdtempSync(join(tmpdir(), 'miyin-html-dl-'))
     process.env.DOWNLOAD_DIR = downloadDir
     upstream.pool = []
+    upstream.hasMore = false
     vi.mocked(probeAudioContent).mockReset()
     vi.mocked(probeAudioContent).mockResolvedValue({ kind: 'not-audio' })
 
@@ -206,6 +210,29 @@ describe('下载内容硬校验：HTML 落地页不得落盘（issue #45）', ()
     // 曲库保持干净
     const files = readdirSync(downloadDir, { recursive: true }).map(String)
     expect(files.filter((f) => f.endsWith('.mp3') || f.endsWith('.flac'))).toEqual([])
+  })
+
+  it('还有组合没探查时先换源重试，穷尽后才失败 —— 且文案不漂移成「试听」', async () => {
+    upstream.pool = [
+      { sourceId: 'src-a', quality: 'flac', url: `${baseUrl}/html1.mp3` },
+      { sourceId: 'src-b', quality: 'flac', url: `${baseUrl}/html2.mp3` },
+    ]
+    // 模拟「本轮只探了部分组合」（真实场景：多音源 × 多档位，探测预算只覆盖一轮）
+    upstream.hasMore = true
+
+    const id = seedQueuedTask()
+    void tickWorker()
+    const failed = await waitUntil(15000, () => getTask(id)?.status === 'failed')
+    expect(failed).toBe(true)
+
+    const task = getTask(id)!
+    // 首轮内容全坏但还有组合 → 回队列换源（attempts=1）；
+    // 第二轮组合已全被排除 → 立刻终态（attempts=2），不再空转
+    expect(task.attempts).toBe(2)
+    // 关键：第二轮候选为空时，stage1 也必须报「内容」，不能退回「试听」——
+    // 否则 PREVIEW_CLIP 会无条件重试，一路空转到 maxAttempts 并给错归因
+    expect(task.error).toContain('未返回可识别的音频内容')
+    expect(task.error).not.toContain('试听')
   })
 
   it('真音频仍能正常落盘（回归锚点：硬校验不能误伤正常文件）', async () => {

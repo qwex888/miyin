@@ -30,8 +30,8 @@ import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
 import { sniffAudioExt, isLosslessClaimMismatch, sniffTextualPayload } from '../utils/audioSniff'
 import {
-  allInvalidContentError,
-  allPreviewError,
+  blockedOutcomeError,
+  type BlockedReason,
   expectedDurationFromMusicInfo,
   isLikelyPreviewByAbsoluteDuration,
   isLikelyPreviewClip,
@@ -1301,15 +1301,22 @@ const HIRES_KBPS = 1500
 /** 攒够这么多个「合格」候选就收工；排序仍会从中挑码率最大的 */
 const PROBE_OK_ENOUGH = 3
 
-/** 记录「已确认不可用」的组合（试听 / 谎报），让手动重试能从断点继续而不是重头再来 */
+/** 记录「已确认不可用」的组合（试听 / 谎报 / 内容不是音频），让手动重试能从断点继续而不是重头再来 */
 function persistPreviewBlocked(
   taskId: string,
   musicInfo: Record<string, unknown>,
   blocked: ReadonlySet<string>,
+  reasons: Readonly<Record<string, BlockedReason>>,
 ) {
   if (!blocked.size) return
   updateTask(taskId, {
-    music_info_json: JSON.stringify({ ...musicInfo, __previewBlocked: [...blocked] }),
+    music_info_json: JSON.stringify({
+      ...musicInfo,
+      __previewBlocked: [...blocked],
+      // 只存有原因记录的 key。旧任务的 __previewBlocked 是纯字符串数组、没有本字段，
+      // 读取侧按 'preview' 兜底 —— 与引入 INVALID_CONTENT 之前的行为一致。
+      __blockedReasons: reasons,
+    }),
   })
 }
 
@@ -1413,6 +1420,17 @@ async function processTask(task: DownloadTaskRow) {
     const previewBlocked = new Set<string>(
       Array.isArray(musicInfo.__previewBlocked) ? (musicInfo.__previewBlocked as string[]) : [],
     )
+    /**
+     * 排除原因（`sourceId@quality` → 原因）。
+     *
+     * 只存 key 存不下「为什么排除」，而收尾文案必须区分试听与内容坏（处置方向相反）。
+     * 老任务没有本字段，读取侧兜底成 'preview' —— 那些记录都产生于引入
+     * INVALID_CONTENT 之前，本来就是试听/谎报，语义对得上。
+     */
+    const blockedReasons: Record<string, BlockedReason> =
+      musicInfo.__blockedReasons && typeof musicInfo.__blockedReasons === 'object'
+        ? { ...(musicInfo.__blockedReasons as Record<string, BlockedReason>) }
+        : {}
     /** 本次尝试新排除了几个组合 —— 只在有新增时才写回，避免每次下载都白写一次 */
     const blockedAtStart = previewBlocked.size
     // 探测预算 = 音源数（覆盖"每个音源试它的最高档"一整轮），并有上限兜底
@@ -1427,8 +1445,6 @@ async function processTask(task: DownloadTaskRow) {
     let plannedPath = ''
     let temp = ''
     let downloaded = false
-    /** 本轮因「内容不是音频」被排除的组合数 —— 用于给最终错误挑准确的文案 */
-    let invalidContentCount = 0
     /** ffprobe 不可用的告警只打一次，避免逐个候选刷日志 */
     let warnedProbeUnavailable = false
 
@@ -1458,6 +1474,7 @@ async function processTask(task: DownloadTaskRow) {
         const key = `${cand.sourceId}@${cand.quality}`
         if (isLikelyPreviewUrl(cand.url)) {
           previewBlocked.add(key)
+          blockedReasons[key] = 'preview'
           return
         }
         const probe = await probeCandidate(cand.url, {
@@ -1467,6 +1484,7 @@ async function processTask(task: DownloadTaskRow) {
         })
         if (probe.verdict === 'preview') {
           previewBlocked.add(key)
+          blockedReasons[key] = 'preview'
           recordSourceOutcome({
             sourceId: cand.sourceId,
             platform: task.platform,
@@ -1497,9 +1515,10 @@ async function processTask(task: DownloadTaskRow) {
 
     if (!candidates.length) {
       if (previewBlocked.size > 0) {
-        persistPreviewBlocked(task.id, musicInfo, previewBlocked)
-        // 还有没探查过的组合时才说"重试可继续"，否则如实告知可能需会员
-        throw allPreviewError(previewBlocked.size, listed.truncated)
+        persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
+        // 与阶段 2 共用同一判定：候选为空时也可能全是「内容坏」（上一轮试过、本轮被 exclude 跳过），
+        // 一律报「只返回试听片段」会把用户引向查会员，而实际该做的是重试/换源。
+        throw blockedOutcomeError(previewBlocked, blockedReasons, listed.truncated)
       }
       const detail = listed.errors.slice(0, 12).join(' | ') || '无详细错误'
       throw Object.assign(
@@ -1684,7 +1703,12 @@ async function processTask(task: DownloadTaskRow) {
           throw err
         }
         previewBlocked.add(key)
-        if (code === 'INVALID_CONTENT') invalidContentCount++
+        blockedReasons[key] =
+          code === 'INVALID_CONTENT'
+            ? 'invalid'
+            : code === 'QUALITY_MISMATCH'
+              ? 'quality-lie'
+              : 'preview'
         recordSourceOutcome({
           sourceId: cand.sourceId,
           platform: task.platform,
@@ -1720,20 +1744,17 @@ async function processTask(task: DownloadTaskRow) {
 
     if (!downloaded) {
       // 把已排除的组合持久化，手动重试可以从断点继续而不是重头再来
-      persistPreviewBlocked(task.id, musicInfo, previewBlocked)
-      // 本轮排除的全是「内容不是音频」时，错误文案要说清是内容问题（直链失效 / 被 CDN 拦了），
-      // 而不是笼统地说「只返回试听片段」—— 两者的处置完全不同
-      const excludedThisRun = previewBlocked.size - blockedAtStart
-      if (invalidContentCount > 0 && invalidContentCount === excludedThisRun) {
-        throw allInvalidContentError(previewBlocked.size)
-      }
-      throw allPreviewError(previewBlocked.size, listed.truncated)
+      persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
+      // 按「已排除项的实际原因」挑文案，而不是「本轮是否出现过坏内容」：
+      // 后者在混合场景（1 个试听 + 1 个 HTML）会退回「均只返回试听片段」，
+      // 把音源直链失效误导成需要会员，用户会朝完全错误的方向排查。
+      throw blockedOutcomeError(previewBlocked, blockedReasons, listed.truncated)
     }
 
     // 刻意**不**清除排除集：它是"哪些路走过不通"的学习结果。
     // 保留后，替换/重下同一首时会直接跳开谎报与试听的音源，而不是重新踩一遍。
     if (previewBlocked.size > blockedAtStart) {
-      persistPreviewBlocked(task.id, musicInfo, previewBlocked)
+      persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
     }
 
     const downloadLyric =
@@ -1816,7 +1837,7 @@ async function processTask(task: DownloadTaskRow) {
       committed = false
     }
   } catch (err: unknown) {
-    const e = err as { message?: string; code?: string; name?: string }
+    const e = err as { message?: string; code?: string; name?: string; hasMore?: boolean }
     let msg = e?.message || String(err)
     if (isDownloadPermissionError(err) && !/无下载目录写入权限/.test(msg)) {
       msg = `无下载目录写入权限: ${settings.downloadDir}`
@@ -1862,17 +1883,32 @@ async function processTask(task: DownloadTaskRow) {
      * 轮次由 `maxAttempts` 约束，不会无限空转。
      */
     const isPreview = String(e?.code) === 'PREVIEW_CLIP'
+    /**
+     * 内容坏（音源返回错误页/坏文件）也值得换源重试 —— 但仅在「还有组合没试」时。
+     *
+     * `hasMore` 由 blockedOutcomeError 写入（源自 listed.truncated）。不设这道门会走向另一个极端：
+     * 全平台都返回 HTML（网络被劫持、音源集体故障）时，每一轮都会立刻重新列候选、
+     * 立刻判空，然后一路空转到 maxAttempts，用户等来的还是同一句话。
+     *
+     * 而一律不重试的现状同样不对：一个源坏掉就整首失败，把「换下一个源很可能就好」
+     * 的常规情况当成终结态，`autoFailover` 开关对它完全无效 —— 且方向与 PREVIEW_CLIP 相反
+     * （试听能自动降档，直链失效反而一步死）。
+     */
+    const isInvalidContent = String(e?.code) === 'INVALID_CONTENT'
+    const invalidHasMore = e?.hasMore !== false
     const isPerm = isDownloadPermissionError(err)
     // 固定音质：resolve 已轮询全部音源；失败即停并提示原因
     const retryable = isPerm
       ? false
       : isPreview
         ? true
-        : fixedQuality
-          ? isRetryableError(err) || String(e?.code) === 'HTTP_RETRY'
-          : isRetryableError(err) ||
-            String(e?.code) === 'HTTP_RETRY' ||
-            String(e?.code) === 'GET_URL_FAILED'
+        : isInvalidContent
+          ? invalidHasMore
+          : fixedQuality
+            ? isRetryableError(err) || String(e?.code) === 'HTTP_RETRY'
+            : isRetryableError(err) ||
+              String(e?.code) === 'HTTP_RETRY' ||
+              String(e?.code) === 'GET_URL_FAILED'
     const alts = fixedQuality
       ? []
       : listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
