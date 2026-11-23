@@ -118,6 +118,25 @@ export function parseFfprobeAudioInfo(stdout: string): AudioProbeInfo {
 }
 
 /**
+ * ffprobe 探测的三种结论。
+ *
+ * 三者必须分开，否则调用方无法区分「文件不是音频」和「我判断不了」：
+ *
+ * - `ok`          —— 解析出了音频流，可信
+ * - `not-audio`   —— ffprobe **跑通了**，但一个音频字段都没有 ⇒ 明确否定
+ * - `unavailable` —— ffprobe **没跑起来**（未安装 / 权限 / 资源耗尽 / 文件读不到）
+ *                    ⇒ 没有任何结论，调用方不得据此判定内容无效
+ *
+ * `unavailable` 单独成一态的原因：ffmpeg 在本项目是**可选依赖**
+ * （`packaging/fnos/miyin/cmd/install_init` 只告警不拦截）。把这一态混进
+ * `not-audio`，等于让「没装 ffmpeg」变成「所有内容都不是音频」。
+ */
+export type AudioProbeOutcome =
+  | { kind: 'ok'; info: AudioProbeInfo }
+  | { kind: 'not-audio' }
+  | { kind: 'unavailable' }
+
+/**
  * 一次 ffprobe 同时拿到时长与真实参数（位深 / 采样率 / 声道 / 容器）。
  *
  * **必须带 `-select_streams a:0`** —— 否则封面图（mjpeg）流会混进输出，
@@ -126,8 +145,8 @@ export function parseFfprobeAudioInfo(stdout: string): AudioProbeInfo {
  * 相比"只取 duration"的查法，实测耗时与内存完全一致（ffprobe 只读文件头、不解码音频），
  * 所以要位深参数不必付出额外代价。
  */
-export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null> {
-  if (!existsSync(filePath)) return Promise.resolve(null)
+export function probeAudioContent(filePath: string): Promise<AudioProbeOutcome> {
+  if (!existsSync(filePath)) return Promise.resolve({ kind: 'unavailable' })
   return new Promise((resolve) => {
     const p = spawn(
       'ffprobe',
@@ -150,13 +169,28 @@ export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null>
     p.stdout?.on('data', (c) => {
       out += String(c)
     })
-    p.on('error', () => resolve(null))
+    // spawn 失败（ffprobe 未安装 → ENOENT、权限不足、资源耗尽）⇒ 判断不了，不是「不是音频」
+    p.on('error', () => resolve({ kind: 'unavailable' }))
     p.on('close', () => {
       const info = parseFfprobeAudioInfo(out)
-      // 一个字段都没解析到 → 视为探测失败
-      resolve(info.durationSec == null && info.codec == null ? null : info)
+      // 一个字段都没解析到 → ffprobe 确实看过了但没找到音频流
+      resolve(
+        info.durationSec == null && info.codec == null
+          ? { kind: 'not-audio' }
+          : { kind: 'ok', info },
+      )
     })
   })
+}
+
+/**
+ * 兼容包装：只要「能拿到的参数」时用。
+ *
+ * ⚠️ 它会把 `not-audio` 与 `unavailable` 一起折叠成 `null`，
+ * 因此**不能**用它判断「内容是不是音频」——那种场景必须用 `probeAudioContent`。
+ */
+export function probeAudioInfo(filePath: string): Promise<AudioProbeInfo | null> {
+  return probeAudioContent(filePath).then((r) => (r.kind === 'ok' ? r.info : null))
 }
 
 /** 只要时长时的薄封装（复用同一次 probe，不额外 spawn） */
@@ -181,6 +215,84 @@ export function previewSizeError(contentLength: number, expectedSec: number): Er
   )
   ;(err as any).code = 'PREVIEW_CLIP'
   return err
+}
+
+/**
+ * 组合预算用尽时的收尾错误 —— 全部候选都返回了**非音频内容**。
+ *
+ * 与 allPreviewError 分开：症状不同（音源返回的是网页/坏文件，不是试听片段），
+ * 提示也不同（多半是直链过期或被 CDN 拦了，换源重试前先看音源可用性）。
+ *
+ * `hasMore` 与 allPreviewError 同义：`true` 表示还有组合没探查，重试能接着往下走。
+ * 少了这个参数时，用户会以为"全部源都试过了"，而实际上探测预算只覆盖了
+ * "每个音源各试它的最高档"这一轮（`PROBE_COMBO_CAP` 见 downloadQueue）。
+ */
+export function allInvalidContentError(tried: number, hasMore: boolean): Error {
+  const tail = hasMore
+    ? '，可点「重试」继续尝试其余音源'
+    : ''
+  const err = new Error(
+    `已试过 ${tried} 个音源/音质组合，均未返回可识别的音频内容（音源可能返回了错误页或文件已损坏）${tail}`,
+  )
+  ;(err as any).code = 'INVALID_CONTENT'
+  ;(err as any).hasMore = hasMore
+  return err
+}
+
+/**
+ * 部分音源返回试听、部分返回非音频内容 —— 混合场景的收尾错误。
+ *
+ * 为什么不能按「本轮是否出现过坏内容」二选一：
+ * - 只要有坏内容就报「均未返回可识别的音频内容」→「均」字是假的，
+ *   多数候选其实只是试听，用户会被引向「重试/换源」，而真正该做的是查会员。
+ * - 只有全是坏内容才报 → 退化成「均只返回试听片段」，
+ *   用户跑去查会员权限，实际是音源直链失效 —— 两类问题的处置完全相反。
+ *
+ * 所以混合场景如实给出两边的数量，让用户自己判断先试哪条路。
+ */
+export function allMixedContentError(
+  previewCount: number,
+  invalidCount: number,
+  hasMore: boolean,
+): Error {
+  const tail = hasMore ? '，可点「重试」继续尝试其余音源' : ''
+  const err = new Error(
+    `已试过 ${previewCount + invalidCount} 个音源/音质组合：` +
+      `${previewCount} 个只返回试听片段，${invalidCount} 个未返回可识别的音频内容${tail}` +
+      `（后者多半是音源返回了错误页或文件已损坏）`,
+  )
+  ;(err as any).code = 'INVALID_CONTENT'
+  ;(err as any).hasMore = hasMore
+  return err
+}
+
+/** 排除原因 —— 收尾文案与重试判定都要据此分支（试听与内容坏的处置方向相反） */
+export type BlockedReason = 'preview' | 'invalid' | 'quality-lie'
+
+/**
+ * 按「已排除项的实际原因」挑收尾错误。
+ *
+ * 阶段 1（一个候选都没攒到）与阶段 2（候选都下载失败）**共用**同一判定 ——
+ * 这是这一版必须补的一半：只改阶段 2 时，重试第二轮会因为阶段 1 仍抛
+ * `allPreviewError` 而把「内容坏」漂移成「试听」，用户两轮拿到相反的归因，
+ * 且 `PREVIEW_CLIP` 是无条件可重试的，会一路空转到 maxAttempts。
+ *
+ * 没有原因记录的历史 key（本字段引入前写入的）按 preview 计 —— 那些记录
+ * 本来就只可能是试听/谎报，语义对得上。
+ */
+export function blockedOutcomeError(
+  blocked: ReadonlySet<string>,
+  reasons: Readonly<Record<string, BlockedReason | undefined>>,
+  hasMore: boolean,
+): Error {
+  let invalid = 0
+  for (const key of blocked) {
+    if (reasons[key] === 'invalid') invalid++
+  }
+  const tried = blocked.size
+  if (invalid === 0) return allPreviewError(tried, hasMore)
+  if (invalid === tried) return allInvalidContentError(tried, hasMore)
+  return allMixedContentError(tried - invalid, invalid, hasMore)
 }
 
 /**

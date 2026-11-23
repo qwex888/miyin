@@ -28,9 +28,10 @@ import { isHighestQuality, listMusicUrlCandidates } from './musicUrlResolve'
 import { recordSourceOutcome } from './sourceStats'
 import { fetchLyric } from './lyricService'
 import { writeAudioMetadata } from './metadataService'
-import { sniffAudioExt, isLosslessClaimMismatch } from '../utils/audioSniff'
+import { sniffAudioExt, isLosslessClaimMismatch, sniffTextualPayload } from '../utils/audioSniff'
 import {
-  allPreviewError,
+  blockedOutcomeError,
+  type BlockedReason,
   expectedDurationFromMusicInfo,
   isLikelyPreviewByAbsoluteDuration,
   isLikelyPreviewClip,
@@ -38,7 +39,7 @@ import {
   minFullTrackBytes,
   previewClipError,
   previewSizeError,
-  probeAudioInfo,
+  probeAudioContent,
   probeCandidate,
   type CandidateVerdict,
 } from '../utils/audioPreview'
@@ -251,6 +252,15 @@ export type ListTasksQuery = {
   limit?: number
 }
 
+/**
+ * 列表、统计与「全选」批量操作共用的筛选条件。
+ * 三者必须取同一组条件，否则筛选态下的分类级批量操作会作用到未筛选的任务。
+ */
+export type TaskListFilter = Pick<
+  ListTasksQuery,
+  'playlistUrl' | 'batchId' | 'q' | 'platform' | 'quality' | 'since' | 'until'
+>
+
 /** LIKE 通配符转义；token 归一化已去除标点，此处为防御性处理 */
 function escapeLikePattern(value: string) {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`)
@@ -280,12 +290,7 @@ function nextDayOf(date: string): string | null {
  * 平台 / 音质 / 入队日期 过滤。
  * **列表与统计必须共用**，否则带筛选时分页 `total` 会按全量算（同 P0 的陷阱 1）。
  */
-function buildMetaClauses(filter?: {
-  platform?: string
-  quality?: string
-  since?: string
-  until?: string
-}) {
+function buildMetaClauses(filter?: TaskListFilter) {
   const sql: string[] = []
   const params: unknown[] = []
   if (filter?.platform) {
@@ -312,6 +317,41 @@ function buildMetaClauses(filter?: {
   return { sql, params }
 }
 
+/** 分类 → 状态条件；列表、统计与分类级批量操作共用，避免语义分叉 */
+function buildTabStatusClause(tab: 'running' | 'completed' | 'failed'): string {
+  if (tab === 'running') return `status IN ('running', 'queued')`
+  if (tab === 'completed') return `status = 'completed'`
+  return `status IN ('failed', 'cancelled')`
+}
+
+/**
+ * 筛选条件 → WHERE 子句与参数。
+ * 列表、统计与「全选」批量操作都走这里，条件集合由类型 TaskListFilter 单一来源定义。
+ */
+function buildFilterClauses(filter?: TaskListFilter) {
+  const sql: string[] = []
+  const params: unknown[] = []
+
+  if (filter?.playlistUrl) {
+    sql.push('playlist_url = ?')
+    params.push(filter.playlistUrl)
+  }
+  if (filter?.batchId) {
+    sql.push('batch_id = ?')
+    params.push(filter.batchId)
+  }
+
+  const keyword = buildKeywordClauses(filter?.q)
+  sql.push(...keyword.sql)
+  params.push(...keyword.params)
+
+  const meta = buildMetaClauses(filter)
+  sql.push(...meta.sql)
+  params.push(...meta.params)
+
+  return { sql, params }
+}
+
 export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   if (typeof queryOrStatus === 'string') {
     return getDb()
@@ -323,13 +363,7 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
   const params: unknown[] = []
 
   if (query.tab) {
-    if (query.tab === 'running') {
-      whereClauses.push(`status IN ('running', 'queued')`)
-    } else if (query.tab === 'completed') {
-      whereClauses.push(`status = 'completed'`)
-    } else if (query.tab === 'failed') {
-      whereClauses.push(`status IN ('failed', 'cancelled')`)
-    }
+    whereClauses.push(buildTabStatusClause(query.tab))
   } else if (query.statuses && query.statuses.length > 0) {
     const placeholders = query.statuses.map(() => '?').join(',')
     whereClauses.push(`status IN (${placeholders})`)
@@ -339,22 +373,9 @@ export function listTasks(queryOrStatus?: string | ListTasksQuery) {
     params.push(query.status)
   }
 
-  if (query.playlistUrl) {
-    whereClauses.push('playlist_url = ?')
-    params.push(query.playlistUrl)
-  }
-  if (query.batchId) {
-    whereClauses.push('batch_id = ?')
-    params.push(query.batchId)
-  }
-
-  const keyword = buildKeywordClauses(query.q)
-  whereClauses.push(...keyword.sql)
-  params.push(...keyword.params)
-
-  const meta = buildMetaClauses(query)
-  whereClauses.push(...meta.sql)
-  params.push(...meta.params)
+  const filter = buildFilterClauses(query)
+  whereClauses.push(...filter.sql)
+  params.push(...filter.params)
 
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
   let orderBySql = 'ORDER BY created_at DESC'
@@ -390,35 +411,8 @@ export type TaskStats = {
   cancelled: number
 }
 
-export function getTaskStats(filter?: {
-  playlistUrl?: string
-  batchId?: string
-  /** 必须与 listTasks 使用同一组过滤条件，否则分页 total 失真 */
-  q?: string
-  platform?: string
-  quality?: string
-  since?: string
-  until?: string
-}): TaskStats {
-  const whereClauses: string[] = []
-  const params: unknown[] = []
-
-  if (filter?.playlistUrl) {
-    whereClauses.push('playlist_url = ?')
-    params.push(filter.playlistUrl)
-  }
-  if (filter?.batchId) {
-    whereClauses.push('batch_id = ?')
-    params.push(filter.batchId)
-  }
-
-  const keyword = buildKeywordClauses(filter?.q)
-  whereClauses.push(...keyword.sql)
-  params.push(...keyword.params)
-
-  const meta = buildMetaClauses(filter)
-  whereClauses.push(...meta.sql)
-  params.push(...meta.params)
+export function getTaskStats(filter?: TaskListFilter): TaskStats {
+  const { sql: whereClauses, params } = buildFilterClauses(filter)
 
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
   const rows = getDb()
@@ -1001,27 +995,94 @@ export function deleteTask(id: string, opts?: { deleteLocalFiles?: boolean }) {
   return { ok: true, id }
 }
 
-export function batchDeleteTasks(ids?: string[], opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed' }) {
+/**
+ * 「全选」是跨分页的全量语义，必须由服务端按与列表/统计相同的条件求出 id。
+ * 条件缺一项，批量操作就会作用到未筛选的任务（音质/平台筛选下误删全部即由此而来）。
+ */
+function resolveTaskIdsForTab(
+  tab: 'running' | 'completed' | 'failed',
+  filter?: TaskListFilter,
+): string[] {
+  const whereClauses = [buildTabStatusClause(tab)]
+  const params: unknown[] = []
+
+  const conditions = buildFilterClauses(filter)
+  whereClauses.push(...conditions.sql)
+  params.push(...conditions.params)
+
+  const rows = getDb()
+    .prepare(`SELECT id FROM download_tasks WHERE ${whereClauses.join(' AND ')}`)
+    .all(...params) as Array<{ id: string }>
+  return rows.map((r) => r.id)
+}
+
+const DELETE_CHUNK_SIZE = 200
+
+function chunkOf<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
+/**
+ * 批量删除任务记录（可选连带本地文件）。
+ *
+ * - 按 200 条一批查询并用 `DELETE ... WHERE id IN (...)` 删除，避免逐条 SELECT+DELETE；
+ * - 先在库中提交删除、再清理磁盘文件：文件删掉不可恢复，不能先于记录删除；
+ * - 每批之间让出事件循环，万级删除时 SSE 心跳与下载 worker 不被整段阻塞。
+ */
+export async function batchDeleteTasks(
+  ids?: string[],
+  opts?: { deleteLocalFiles?: boolean; tab?: 'completed' | 'failed'; filter?: TaskListFilter },
+) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
-    targetIds.push(...ids)
-  } else if (opts?.tab === 'completed') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status = 'completed'`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
-  } else if (opts?.tab === 'failed') {
-    const rows = getDb().prepare(`SELECT id FROM download_tasks WHERE status IN ('failed', 'cancelled')`).all() as Array<{ id: string }>
-    targetIds.push(...rows.map((r) => r.id))
+    targetIds.push(...new Set(ids))
+  } else if (opts?.tab) {
+    targetIds.push(...resolveTaskIdsForTab(opts.tab, opts.filter))
   }
+
   let deleted = 0
   const errors: Array<{ id: string; error: string }> = []
-  for (const id of targetIds) {
-    try {
-      deleteTask(id, opts)
-      deleted += 1
-    } catch (e: any) {
-      errors.push({ id, error: e?.message || String(e) })
+
+  for (const chunk of chunkOf(targetIds, DELETE_CHUNK_SIZE)) {
+    const placeholders = chunk.map(() => '?').join(',')
+    const rows = getDb()
+      .prepare(`SELECT * FROM download_tasks WHERE id IN (${placeholders})`)
+      .all(...chunk) as DownloadTaskRow[]
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    const deletable: DownloadTaskRow[] = []
+    for (const id of chunk) {
+      const task = byId.get(id)
+      if (!task) {
+        errors.push({ id, error: '任务不存在' })
+      } else if (task.status === 'running' || task.status === 'queued') {
+        errors.push({ id, error: '进行中的任务请先取消' })
+      } else {
+        deletable.push(task)
+      }
     }
+    if (!deletable.length) continue
+
+    // 单条 DELETE 自带原子性：本批要么全部删除，要么（SQL 报错时）一条不删
+    const deleteIds = deletable.map((task) => task.id)
+    const deletePlaceholders = deleteIds.map(() => '?').join(',')
+    getDb()
+      .prepare(`DELETE FROM download_tasks WHERE id IN (${deletePlaceholders})`)
+      .run(...deleteIds)
+    deleted += deleteIds.length
+
+    // 记录已提交后再动磁盘，删除文件不可回滚
+    for (const task of deletable) {
+      if (opts?.deleteLocalFiles) removeTaskFiles(task)
+      downloadEvents.emit('task', { ...task, status: 'deleted' })
+    }
+
+    // 让出事件循环，避免长批量把 SSE 心跳按住
+    await new Promise<void>((resolve) => setImmediate(resolve))
   }
+
   return { deleted, errors }
 }
 
@@ -1300,15 +1361,22 @@ const HIRES_KBPS = 1500
 /** 攒够这么多个「合格」候选就收工；排序仍会从中挑码率最大的 */
 const PROBE_OK_ENOUGH = 3
 
-/** 记录「已确认不可用」的组合（试听 / 谎报），让手动重试能从断点继续而不是重头再来 */
+/** 记录「已确认不可用」的组合（试听 / 谎报 / 内容不是音频），让手动重试能从断点继续而不是重头再来 */
 function persistPreviewBlocked(
   taskId: string,
   musicInfo: Record<string, unknown>,
   blocked: ReadonlySet<string>,
+  reasons: Readonly<Record<string, BlockedReason>>,
 ) {
   if (!blocked.size) return
   updateTask(taskId, {
-    music_info_json: JSON.stringify({ ...musicInfo, __previewBlocked: [...blocked] }),
+    music_info_json: JSON.stringify({
+      ...musicInfo,
+      __previewBlocked: [...blocked],
+      // 只存有原因记录的 key。旧任务的 __previewBlocked 是纯字符串数组、没有本字段，
+      // 读取侧按 'preview' 兜底 —— 与引入 INVALID_CONTENT 之前的行为一致。
+      __blockedReasons: reasons,
+    }),
   })
 }
 
@@ -1403,7 +1471,7 @@ async function processTask(task: DownloadTaskRow) {
     const qualityPref = task.quality || settings.defaultQuality
 
     /**
-     * 已确认不可用而需要跳过的 `sourceId@quality` 组合（试听 / 谎报档位）。
+     * 已确认不可用而需要跳过的 `sourceId@quality` 组合（试听 / 谎报档位 / 内容不是音频）。
      *
      * 取链成功**不代表内容正确** —— 会员曲目能取到链接但内容是 60s 试听，
      * 也有音源把 320k mp3 标成 flac24bit。这些都只有拿到响应头/文件才暴露，
@@ -1412,6 +1480,17 @@ async function processTask(task: DownloadTaskRow) {
     const previewBlocked = new Set<string>(
       Array.isArray(musicInfo.__previewBlocked) ? (musicInfo.__previewBlocked as string[]) : [],
     )
+    /**
+     * 排除原因（`sourceId@quality` → 原因）。
+     *
+     * 只存 key 存不下「为什么排除」，而收尾文案必须区分试听与内容坏（处置方向相反）。
+     * 老任务没有本字段，读取侧兜底成 'preview' —— 那些记录都产生于引入
+     * INVALID_CONTENT 之前，本来就是试听/谎报，语义对得上。
+     */
+    const blockedReasons: Record<string, BlockedReason> =
+      musicInfo.__blockedReasons && typeof musicInfo.__blockedReasons === 'object'
+        ? { ...(musicInfo.__blockedReasons as Record<string, BlockedReason>) }
+        : {}
     /** 本次尝试新排除了几个组合 —— 只在有新增时才写回，避免每次下载都白写一次 */
     const blockedAtStart = previewBlocked.size
     // 探测预算 = 音源数（覆盖"每个音源试它的最高档"一整轮），并有上限兜底
@@ -1426,6 +1505,8 @@ async function processTask(task: DownloadTaskRow) {
     let plannedPath = ''
     let temp = ''
     let downloaded = false
+    /** ffprobe 不可用的告警只打一次，避免逐个候选刷日志 */
+    let warnedProbeUnavailable = false
 
     // ── 阶段 1：收集候选并探测（每个候选只读响应头，不下载内容）──
     type Candidate = {
@@ -1453,6 +1534,7 @@ async function processTask(task: DownloadTaskRow) {
         const key = `${cand.sourceId}@${cand.quality}`
         if (isLikelyPreviewUrl(cand.url)) {
           previewBlocked.add(key)
+          blockedReasons[key] = 'preview'
           return
         }
         const probe = await probeCandidate(cand.url, {
@@ -1462,6 +1544,7 @@ async function processTask(task: DownloadTaskRow) {
         })
         if (probe.verdict === 'preview') {
           previewBlocked.add(key)
+          blockedReasons[key] = 'preview'
           recordSourceOutcome({
             sourceId: cand.sourceId,
             platform: task.platform,
@@ -1492,9 +1575,10 @@ async function processTask(task: DownloadTaskRow) {
 
     if (!candidates.length) {
       if (previewBlocked.size > 0) {
-        persistPreviewBlocked(task.id, musicInfo, previewBlocked)
-        // 还有没探查过的组合时才说"重试可继续"，否则如实告知可能需会员
-        throw allPreviewError(previewBlocked.size, listed.truncated)
+        persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
+        // 与阶段 2 共用同一判定：候选为空时也可能全是「内容坏」（上一轮试过、本轮被 exclude 跳过），
+        // 一律报「只返回试听片段」会把用户引向查会员，而实际该做的是重试/换源。
+        throw blockedOutcomeError(previewBlocked, blockedReasons, listed.truncated)
       }
       const detail = listed.errors.slice(0, 12).join(' | ') || '无详细错误'
       throw Object.assign(
@@ -1600,7 +1684,50 @@ async function processTask(task: DownloadTaskRow) {
         }
 
         // 试听检测 + L3：一次 ffprobe 同时拿时长与真实参数（位深/采样率/声道），不额外 spawn
-        const info = await probeAudioInfo(temp)
+        const probe = await probeAudioContent(temp)
+        const info = probe.kind === 'ok' ? probe.info : null
+
+        // ★ 内容硬校验：**只在拿到明确否定证据时拒**，绝不把「判断不了」当成「不是音频」。
+        //
+        // 背景：音源偶尔返回的不是音频，而是 HTML 落地页 / 校验页（直链过期、CDN 拦截），
+        // 旧逻辑两道校验都是「不认识就放行」—— sniffAudioExt 对 HTML 返回 null，
+        // isLosslessClaimMismatch 见 null 直接 return false；ffprobe 对 HTML 也拿不到
+        // 任何字段，`if (actual != null)` 把试听/时长检测整段跳过 ——
+        // 于是网页被 rename 成 .mp3 落盘，曲库混入伪音频（issue #45）。
+        //
+        // 但 ffmpeg 在本项目是**可选依赖**（packaging/fnos/miyin/cmd/install_init 只告警不拦截）。
+        // 缺 ffprobe 时「魔数认不出 + ffprobe 也认不出」会同时成立，若据此硬拒，
+        // 没装 ffmpeg 的机器连正常音频都下不到 —— 等于把一个元数据工具升级成下载硬门槛。
+        //
+        // 因此按探测结论分两种：
+        //   · not-audio   —— ffprobe 跑通了却没有音频流，属明确否定证据 ⇒ 拒
+        //   · unavailable —— ffprobe 没跑起来，没有任何结论 ⇒ 退回「内容自证」兜底：
+        //                    文本载荷（HTML/XML/JSON/纯文本）一定不是音频 ⇒ 拒；
+        //                    其余未知二进制放行（与旧版本降级行为一致，不扩大拒绝面）
+        if (!sniffed && !info) {
+          let invalidReason: string | null = null
+          if (probe.kind === 'not-audio') {
+            invalidReason = 'ffprobe 未解析出音频流'
+          } else {
+            const textual = sniffTextualPayload(temp)
+            if (textual) {
+              invalidReason = `内容是 ${textual} 文本而非音频`
+            } else if (!warnedProbeUnavailable) {
+              warnedProbeUnavailable = true
+              console.warn(
+                `[download] ${task.title}: 未检测到可用的 ffprobe，跳过真实格式/时长校验并放行；` +
+                  '建议在系统中安装 ffmpeg 以启用试听片段识别与位深修正',
+              )
+            }
+          }
+          if (invalidReason) {
+            const err = new Error(
+              `内容不是可识别的音频（${invalidReason}，${cand.sourceId.slice(0, 8)}）`,
+            ) as Error & { code?: string }
+            err.code = 'INVALID_CONTENT'
+            throw err
+          }
+        }
         const actual = info?.durationSec ?? null
         if (actual != null) {
           if (expectedDuration && expectedDuration > 0 && isLikelyPreviewClip(actual, expectedDuration)) {
@@ -1632,12 +1759,25 @@ async function processTask(task: DownloadTaskRow) {
         }
       } catch (err: unknown) {
         const code = String((err as { code?: string })?.code)
-        if (code !== 'PREVIEW_CLIP' && code !== 'QUALITY_MISMATCH') throw err
+        if (code !== 'PREVIEW_CLIP' && code !== 'QUALITY_MISMATCH' && code !== 'INVALID_CONTENT') {
+          throw err
+        }
         previewBlocked.add(key)
+        blockedReasons[key] =
+          code === 'INVALID_CONTENT'
+            ? 'invalid'
+            : code === 'QUALITY_MISMATCH'
+              ? 'quality-lie'
+              : 'preview'
         recordSourceOutcome({
           sourceId: cand.sourceId,
           platform: task.platform,
-          outcome: code === 'QUALITY_MISMATCH' ? 'quality-lie' : 'preview',
+          outcome:
+            code === 'QUALITY_MISMATCH'
+              ? 'quality-lie'
+              : code === 'INVALID_CONTENT'
+                ? 'invalid-content'
+                : 'preview',
         })
         removeFileQuiet(temp)
         tempPath = null
@@ -1664,14 +1804,17 @@ async function processTask(task: DownloadTaskRow) {
 
     if (!downloaded) {
       // 把已排除的组合持久化，手动重试可以从断点继续而不是重头再来
-      persistPreviewBlocked(task.id, musicInfo, previewBlocked)
-      throw allPreviewError(previewBlocked.size, listed.truncated)
+      persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
+      // 按「已排除项的实际原因」挑文案，而不是「本轮是否出现过坏内容」：
+      // 后者在混合场景（1 个试听 + 1 个 HTML）会退回「均只返回试听片段」，
+      // 把音源直链失效误导成需要会员，用户会朝完全错误的方向排查。
+      throw blockedOutcomeError(previewBlocked, blockedReasons, listed.truncated)
     }
 
     // 刻意**不**清除排除集：它是"哪些路走过不通"的学习结果。
     // 保留后，替换/重下同一首时会直接跳开谎报与试听的音源，而不是重新踩一遍。
     if (previewBlocked.size > blockedAtStart) {
-      persistPreviewBlocked(task.id, musicInfo, previewBlocked)
+      persistPreviewBlocked(task.id, musicInfo, previewBlocked, blockedReasons)
     }
 
     const downloadLyric =
@@ -1754,7 +1897,7 @@ async function processTask(task: DownloadTaskRow) {
       committed = false
     }
   } catch (err: unknown) {
-    const e = err as { message?: string; code?: string; name?: string }
+    const e = err as { message?: string; code?: string; name?: string; hasMore?: boolean }
     let msg = e?.message || String(err)
     if (isDownloadPermissionError(err) && !/无下载目录写入权限/.test(msg)) {
       msg = `无下载目录写入权限: ${settings.downloadDir}`
@@ -1800,25 +1943,49 @@ async function processTask(task: DownloadTaskRow) {
      * 轮次由 `maxAttempts` 约束，不会无限空转。
      */
     const isPreview = String(e?.code) === 'PREVIEW_CLIP'
+    /**
+     * 内容坏（音源返回错误页/坏文件）也值得换源重试 —— 但仅在「还有组合没试」时。
+     *
+     * `hasMore` 由 blockedOutcomeError 写入（源自 listed.truncated）。不设这道门会走向另一个极端：
+     * 全平台都返回 HTML（网络被劫持、音源集体故障）时，每一轮都会立刻重新列候选、
+     * 立刻判空，然后一路空转到 maxAttempts，用户等来的还是同一句话。
+     *
+     * 而一律不重试的现状同样不对：一个源坏掉就整首失败，把「换下一个源很可能就好」
+     * 的常规情况当成终结态，`autoFailover` 开关对它完全无效 —— 且方向与 PREVIEW_CLIP 相反
+     * （试听能自动降档，直链失效反而一步死）。
+     */
+    const isInvalidContent = String(e?.code) === 'INVALID_CONTENT'
+    const invalidHasMore = e?.hasMore !== false
     const isPerm = isDownloadPermissionError(err)
     // 固定音质：resolve 已轮询全部音源；失败即停并提示原因
     const retryable = isPerm
       ? false
       : isPreview
         ? true
-        : fixedQuality
-          ? isRetryableError(err) || String(e?.code) === 'HTTP_RETRY'
-          : isRetryableError(err) ||
-            String(e?.code) === 'HTTP_RETRY' ||
-            String(e?.code) === 'GET_URL_FAILED'
+        : isInvalidContent
+          ? invalidHasMore
+          : fixedQuality
+            ? isRetryableError(err) || String(e?.code) === 'HTTP_RETRY'
+            : isRetryableError(err) ||
+              String(e?.code) === 'HTTP_RETRY' ||
+              String(e?.code) === 'GET_URL_FAILED'
     const alts = fixedQuality
       ? []
       : listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
+    /**
+     * 能不能真的换到「另一个源」：
+     * - 固定音质时 alts 恒空（resolve 已轮询过全部音源，再换只是重复同一批请求）
+     * - 本地错误（目录不可写/只读）换源照样写不进同一块盘，重跑只会把「没权限」
+     *   重复 maxAttempts 次，还占着并发槽
+     * - 内容坏且候选表已探完（hasMore=false）时换源也没有新组合，放行只会空转到上限
+     */
+    const canSwitchSource =
+      !isPerm && !(isInvalidContent && !invalidHasMore) && alts.length > 0
     const nextStatus = nextStatusAfterFailure({
       attempts,
       maxAttempts: settings2.maxAttempts,
       autoFailover: settings2.autoFailover,
-      hasAltSource: alts.length > 0,
+      hasAltSource: canSwitchSource,
       retryable,
     })
     if (nextStatus === 'queued') {
