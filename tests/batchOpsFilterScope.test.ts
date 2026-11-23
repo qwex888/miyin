@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listTasks, batchCancelTasks, batchRetryTasks } from '../server/services/downloadQueue'
 import { closeDb, getDb } from '../server/utils/db'
-import { parseTaskFilter } from '../server/utils/taskFilter'
+import { parseTaskFilter } from '../server/utils/deleteFilter'
 
 declare global {
   var createError: (input: { statusCode?: number; statusMessage?: string; data?: unknown }) => Error

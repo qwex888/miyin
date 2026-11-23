@@ -56,6 +56,12 @@ const untilFilter = ref('')
 const searchTabScope = ref<'running' | 'completed' | 'failed' | null>(null)
 /** 关键词检索默认跨 tab（需求要求），仅在用户点分类后才收窄 */
 const isCrossTabSearch = computed(() => !!searchKeyword.value && !searchTabScope.value)
+/**
+ * 「全选」是否代表服务端可求值的整个分类。
+ * 跨分类搜索没有对应的分类语义，只能按显式勾选的 id 操作。
+ * 删除 / 取消 / 重试 / 换音质 / 换源共用这一个判断，避免各处口径分叉。
+ */
+const useScopeAll = computed(() => selectAllState.value && !isCrossTabSearch.value)
 
 /** 任务状态 → 队列页分类 */
 function statusGroupOf(status: string): 'running' | 'completed' | 'failed' | null {
@@ -692,7 +698,8 @@ function toggleOne(id: string, checked: boolean) {
   const next = new Set(selected.value)
   if (checked) {
     next.add(id)
-    if (items.value.length > 0 && next.size === currentTabTotal.value) {
+    // 跨分类搜索没有「整分类全选」的服务端语义，逐条勾满也不能升级为全选
+    if (!isCrossTabSearch.value && items.value.length > 0 && next.size === currentTabTotal.value) {
       selectAllState.value = true
     }
   } else {
@@ -703,6 +710,7 @@ function toggleOne(id: string, checked: boolean) {
 }
 
 function toggleSelectAll() {
+  if (isCrossTabSearch.value) return
   if (selectAllState.value || (items.value.length > 0 && selected.value.size === items.value.length)) {
     clearSelection()
   } else {
@@ -788,7 +796,7 @@ async function onQualityConfirm(payload: { quality: string }) {
             ids: selectAllState.value ? undefined : pending.tasks.map((t) => t.id),
             allWithTab: selectAllState.value ? 'failed' : undefined,
             quality: payload.quality,
-            filters: selectAllState.value ? activeFilterParams() : undefined,
+            filters: useScopeAll.value ? activeFilterParams() : undefined,
           },
         },
       )
@@ -826,8 +834,8 @@ async function batchDelete() {
   const label = selectedGroup.value === 'failed' ? '失败/取消' : '已完成'
   deletePending = { mode: 'batch' }
   deleteDialogTitle.value = '批量删除'
-  deleteDialogDesc.value = selectAllState.value
-    ? `确定删除当前分类下全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
+  deleteDialogDesc.value = useScopeAll.value
+    ? `确定删除${hasActiveFilters.value ? '当前筛选条件下' : '当前分类下'}全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
     : `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
   deleteDialogOpen.value = true
 }
@@ -851,21 +859,33 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
       selected.value = new Set(selected.value)
       toast.success(payload.deleteLocalFiles ? '已删除任务与本地文件' : '已删除任务记录')
     } else {
-      const res = await $fetch<{ deleted: number }>('/api/downloads/batch-delete', {
+      const res = await $fetch<{
+        deleted: number
+        errors?: Array<{ id: string; error: string }>
+      }>('/api/downloads/batch-delete', {
         method: 'POST',
         body: {
-          ids: selectAllState.value ? undefined : [...selected.value],
-          // selectAllState 仅在非跨 tab 搜索时可用，此时 selectedGroup 恒等于当前分类
-          allWithTab: selectAllState.value
+          ids: useScopeAll.value ? undefined : [...selected.value],
+          allWithTab: useScopeAll.value
             ? (selectedGroup.value as 'completed' | 'failed')
             : undefined,
+          // 全选含未加载的分页，筛选条件要一并交给服务端求 id，否则会删到其他音质/平台
+          filters: useScopeAll.value ? activeFilterParams() : undefined,
           deleteLocalFiles: payload.deleteLocalFiles,
         },
       })
       clearSelection()
-      toast.success(
-        `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
-      )
+      const failed = res.errors?.length || 0
+      if (failed) {
+        // 状态在删除前刚变成进行中等原因会拒绝删除，不能只报「已删除 N 条」把失败藏掉
+        toast.warning(
+          `已删除 ${res.deleted} 条，${failed} 条未能删除（${res.errors?.[0]?.error || '未知原因'}）`,
+        )
+      } else {
+        toast.success(
+          `已删除 ${res.deleted} 条` + (payload.deleteLocalFiles ? '（含本地文件）' : ''),
+        )
+      }
     }
     deleteDialogOpen.value = false
     deletePending = null
@@ -897,7 +917,7 @@ async function batchCancel() {
       body: {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'running' : undefined,
-        filters: selectAllState.value ? activeFilterParams() : undefined,
+        filters: useScopeAll.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()
@@ -927,7 +947,7 @@ async function batchRetry() {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'failed' : undefined,
         resetAttempts: true,
-        filters: selectAllState.value ? activeFilterParams() : undefined,
+        filters: useScopeAll.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()

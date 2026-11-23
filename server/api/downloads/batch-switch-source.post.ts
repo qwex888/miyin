@@ -1,5 +1,5 @@
 import { batchSwitchSourceAndRetry } from '~~/server/services/downloadQueue'
-import { parseTaskFilter } from '~~/server/utils/taskFilter'
+import { parseTaskFilter } from '~~/server/utils/deleteFilter'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{
