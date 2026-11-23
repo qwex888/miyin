@@ -56,6 +56,12 @@ const untilFilter = ref('')
 const searchTabScope = ref<'running' | 'completed' | 'failed' | null>(null)
 /** 关键词检索默认跨 tab（需求要求），仅在用户点分类后才收窄 */
 const isCrossTabSearch = computed(() => !!searchKeyword.value && !searchTabScope.value)
+/**
+ * 「全选」是否代表服务端可求值的整个分类。
+ * 跨分类搜索没有对应的分类语义，只能按显式勾选的 id 操作。
+ * 删除 / 取消 / 重试 / 换音质 / 换源共用这一个判断，避免各处口径分叉。
+ */
+const useScopeAll = computed(() => selectAllState.value && !isCrossTabSearch.value)
 
 /** 任务状态 → 队列页分类 */
 function statusGroupOf(status: string): 'running' | 'completed' | 'failed' | null {
@@ -225,7 +231,12 @@ async function onSwitchConfirm(payload: { sourceId: string; source: SwitchSource
         '/api/downloads/batch-switch-source',
         {
           method: 'POST',
-          body: { allWithTab: 'failed', sourceId: payload.sourceId },
+          body: {
+            allWithTab: 'failed',
+            sourceId: payload.sourceId,
+            // 筛选条件一起下发：否则「全选换源」会作用到筛选外的失败任务
+            filters: activeFilterParams(),
+          },
         },
       )
       const ok = res.items.filter((i) => !i.error).length
@@ -785,6 +796,7 @@ async function onQualityConfirm(payload: { quality: string }) {
             ids: selectAllState.value ? undefined : pending.tasks.map((t) => t.id),
             allWithTab: selectAllState.value ? 'failed' : undefined,
             quality: payload.quality,
+            filters: useScopeAll.value ? activeFilterParams() : undefined,
           },
         },
       )
@@ -820,11 +832,9 @@ async function deleteOne(t: Task) {
 async function batchDelete() {
   if (!selectedCount.value) return
   const label = selectedGroup.value === 'failed' ? '失败/取消' : '已完成'
-  // 跨分类搜索时服务端没有对应的「整分类」可删，只能按显式勾选的 id 执行
-  const useScopeAll = selectAllState.value && !isCrossTabSearch.value
   deletePending = { mode: 'batch' }
   deleteDialogTitle.value = '批量删除'
-  deleteDialogDesc.value = useScopeAll
+  deleteDialogDesc.value = useScopeAll.value
     ? `确定删除${hasActiveFilters.value ? '当前筛选条件下' : '当前分类下'}全部 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
     : `确定删除选中的 ${selectedCount.value} 条${label}任务吗？默认仅删除队列记录，可勾选同时删除本地文件。`
   deleteDialogOpen.value = true
@@ -849,19 +859,18 @@ async function onDeleteConfirm(payload: { deleteLocalFiles: boolean }) {
       selected.value = new Set(selected.value)
       toast.success(payload.deleteLocalFiles ? '已删除任务与本地文件' : '已删除任务记录')
     } else {
-      const useScopeAll = selectAllState.value && !isCrossTabSearch.value
       const res = await $fetch<{
         deleted: number
         errors?: Array<{ id: string; error: string }>
       }>('/api/downloads/batch-delete', {
         method: 'POST',
         body: {
-          ids: useScopeAll ? undefined : [...selected.value],
-          allWithTab: useScopeAll
+          ids: useScopeAll.value ? undefined : [...selected.value],
+          allWithTab: useScopeAll.value
             ? (selectedGroup.value as 'completed' | 'failed')
             : undefined,
           // 全选含未加载的分页，筛选条件要一并交给服务端求 id，否则会删到其他音质/平台
-          filters: useScopeAll ? activeFilterParams() : undefined,
+          filters: useScopeAll.value ? activeFilterParams() : undefined,
           deleteLocalFiles: payload.deleteLocalFiles,
         },
       })
@@ -908,6 +917,7 @@ async function batchCancel() {
       body: {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'running' : undefined,
+        filters: useScopeAll.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()
@@ -937,6 +947,7 @@ async function batchRetry() {
         ids: selectAllState.value ? undefined : [...selected.value],
         allWithTab: selectAllState.value ? 'failed' : undefined,
         resetAttempts: true,
+        filters: useScopeAll.value ? activeFilterParams() : undefined,
       },
     })
     clearSelection()
