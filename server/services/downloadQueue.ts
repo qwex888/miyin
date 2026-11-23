@@ -519,6 +519,30 @@ type PreparedEnqueue = {
 }
 
 /** 校验 + 解析音源。放在事务外：不涉及写入，抛错时无需回滚 */
+/** 服务端自用的 `music_info_json` 内部字段前缀 */
+const INTERNAL_FIELD_PREFIX = '__'
+
+/**
+ * 丢弃客户端传入的内部字段。
+ *
+ * `music_info_json` 里的 `__` 字段全部由服务端写入并在后续步骤里当作「可信路径」使用：
+ * `__replaceOldFile` / `__replaceOldLyric` 会在新文件落地后被 **unlink**，
+ * `__previewBlocked` / `__blockedReasons` 决定跳过哪些候选。客户端若能透传，
+ * 就等于把「删哪个文件、禁用哪些音源」交给了调用方（任意文件删除）。
+ *
+ * 正常流程不需要客户端带任何 `__` 字段：替换信息由 `updateRowForReplace` 从库里
+ * 既有记录生成，排除集由 worker 写回。
+ */
+function stripInternalFields(musicInfo: Record<string, unknown> | undefined) {
+  if (!musicInfo || typeof musicInfo !== 'object') return {}
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(musicInfo)) {
+    if (key.startsWith(INTERNAL_FIELD_PREFIX)) continue
+    out[key] = value
+  }
+  return out
+}
+
 function prepareEnqueue(input: EnqueueDownloadInput, settings: AppSettings): PreparedEnqueue {
   if (input.quality != null && input.quality !== '' && !isAllowedQuality(input.quality)) {
     throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${input.quality}` })
@@ -534,7 +558,7 @@ function prepareEnqueue(input: EnqueueDownloadInput, settings: AppSettings): Pre
     sourceId,
     quality: input.quality || settings.defaultQuality,
     musicPayload: {
-      ...input.musicInfo,
+      ...stripInternalFields(input.musicInfo),
       __downloadLyric: input.downloadLyric ?? settings.downloadLyric,
       __lyricMode: input.lyricMode ?? settings.lyricMode,
       ...(input.folderPrefix ? { __folderPrefix: input.folderPrefix } : {}),

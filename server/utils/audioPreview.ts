@@ -2,6 +2,13 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { MIN_KBPS_ANY, estimateBitrateKbps, qualityPlausibility } from '#shared/quality'
 
+/**
+ * ffprobe 单次探测的硬超时。
+ * ffprobe 只读文件头，正常应在几十毫秒内返回；超出这个量级只可能是网络挂载阻塞或
+ * 文件损坏。超时后 kill 并按 `unavailable`（判断不了）处理，让下载继续而不是卡死。
+ */
+const PROBE_TIMEOUT_MS = Number(process.env.MIYIN_FFPROBE_TIMEOUT_MS || 15000)
+
 /** 解析 interval / duration 为秒。支持 "4:28"、"1:02:03"、秒数字、毫秒大数 */
 export function parseIntervalToSeconds(raw: unknown): number | null {
   if (raw == null || raw === '') return null
@@ -166,12 +173,34 @@ export function probeAudioContent(filePath: string): Promise<AudioProbeOutcome> 
       { stdio: ['ignore', 'pipe', 'ignore'] },
     )
     let out = ''
+    /**
+     * 超时兜底：网络挂载（SMB/NFS）或损坏文件上 ffprobe 可能永久阻塞，
+     * 而 `processTask` 是 await 这个 promise 的 —— 没有超时就会永久占住一个并发槽
+     * （表现为「下载卡在某首歌不动、重启才恢复」）。
+     *
+     * kill 之后 `close` 仍会触发，此时没有解析到任何字段 → 走 `unavailable`
+     * （「判断不了」而非「不是音频」），不会误杀正常音频。
+     */
+    let killedByTimeout = false
+    const timer = setTimeout(() => {
+      killedByTimeout = true
+      p.kill('SIGKILL')
+    }, PROBE_TIMEOUT_MS)
     p.stdout?.on('data', (c) => {
-      out += String(c)
+      // ffprobe 输出是几十字节级别的键值对；仍设上限，避免异常输入撑爆内存
+      if (out.length < 64 * 1024) out += String(c)
     })
     // spawn 失败（ffprobe 未安装 → ENOENT、权限不足、资源耗尽）⇒ 判断不了，不是「不是音频」
-    p.on('error', () => resolve({ kind: 'unavailable' }))
+    p.on('error', () => {
+      clearTimeout(timer)
+      resolve({ kind: 'unavailable' })
+    })
     p.on('close', () => {
+      clearTimeout(timer)
+      if (killedByTimeout) {
+        resolve({ kind: 'unavailable' })
+        return
+      }
       const info = parseFfprobeAudioInfo(out)
       // 一个字段都没解析到 → ffprobe 确实看过了但没找到音频流
       resolve(

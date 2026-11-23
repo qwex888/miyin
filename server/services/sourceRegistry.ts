@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs'
 import { getDb } from '../utils/db'
 import { getSourceCachePath } from '../utils/paths'
+import { assertSafeSourceId } from '../utils/sourceId'
 import { allocateUniqueName, cleanSourceName, parseSourceText } from './sourceImport'
 import { probeLocalScript } from './sourceProbe'
 import type { SourceBatchHandlers, SourceProgressReporter } from '#shared/sourceBatchProgress'
@@ -475,6 +476,8 @@ export async function addSourceFromScript(input: {
     }
   }
 
+  // id 即将参与缓存文件路径拼接（<dataDir>/sources/<id>.js），先校验合法性再查重
+  assertSafeSourceId(id)
   if (getSource(id)) {
     throw createError({ statusCode: 409, statusMessage: '音源 ID 已存在' })
   }
