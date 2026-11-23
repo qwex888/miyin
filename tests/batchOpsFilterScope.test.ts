@@ -158,8 +158,11 @@ describe('parseTaskFilter 对非法入参 fail-closed', () => {
     })
   })
 
-  it('空串等同未设置（与列表接口一致）', () => {
-    expect(parseTaskFilter({ quality: '   ', platform: '' })).toEqual({})
+  // 空串在批量操作里不能当成「未设置」：条件消失 = 作用域退化成整个分类，
+  // 和本次修复要堵的是同一个洞。
+  it('空白串必须报错，不能退化成「未设置」', () => {
+    expect(() => parseTaskFilter({ quality: '   ' })).toThrow()
+    expect(() => parseTaskFilter({ platform: '' })).toThrow()
   })
 
   it('非字符串值必须报错，不能静默丢条件', () => {

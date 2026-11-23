@@ -6,8 +6,10 @@
  * 「操作整个分类」。这类错误一旦发生就是数据丢失，所以这里一律 fail-closed：
  * 只要入参有歧义就 400，宁可不执行。
  *
- * 字段名与 `/api/downloads` 的 query 参数保持一致（snake_case），
- * 语义也保持一致（空串 == 未设置）。
+ * 字段名与 `/api/downloads` 的 query 参数保持一致（snake_case），但**不接受**
+ * 空串：查询接口里空串等于「未设置」只是多显示几行，批量操作里空串一旦被
+ * 当成「未设置」，条件就凭空消失、作用域退化成整个分类 —— 与本次修复要堵的
+ * 是同一个洞。前端本来就不会发空值，所以空串只可能是调用方 bug，直接 400。
  */
 
 export interface TaskFilter {
@@ -64,8 +66,10 @@ export function parseTaskFilter(raw: unknown): TaskFilter {
       throw createError({ statusCode: 400, statusMessage: `筛选字段 ${rawKey} 必须是字符串` })
     }
     const value = rawValue.trim()
-    // 空串视为「未设置」，与列表接口 str() 的语义持平
-    if (!value) continue
+    // 空串不当作「未设置」：批量操作里条件消失 = 作用域放大到整个分类
+    if (!value) {
+      throw createError({ statusCode: 400, statusMessage: `筛选字段 ${rawKey} 不能为空` })
+    }
     if (field === 'since' || field === 'until') {
       if (!isRealDate(value)) {
         throw createError({ statusCode: 400, statusMessage: `${rawKey} 必须是合法的 YYYY-MM-DD` })
