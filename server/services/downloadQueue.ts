@@ -414,12 +414,7 @@ export type TaskStats = {
 export function getTaskStats(filter?: TaskListFilter): TaskStats {
   const { sql: whereClauses, params } = buildFilterClauses(filter)
 
-  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''
-  const rows = getDb()
-    .prepare(`SELECT status, count(*) as count FROM download_tasks ${whereSql} GROUP BY status`)
-    .all(...params) as Array<{ status: string; count: number }>
-
-  const stats: TaskStats = {
+  const empty: TaskStats = {
     total: 0,
     completed: 0,
     failed: 0,
@@ -427,6 +422,32 @@ export function getTaskStats(filter?: TaskListFilter): TaskStats {
     queued: 0,
     cancelled: 0,
   }
+
+  // 无筛选：读常量表（触发器维护），避免每次下载事件后都做一次 GROUP BY 全表扫描。
+  // 带筛选（关键词/平台/音质/日期）时条件无法从常量表推导，仍走主表聚合 ——
+  // 这是用户主动触发的低频路径，且此时本就需要扫描。
+  if (!whereClauses.length) {
+    const rows = getDb()
+      .prepare('SELECT status, n FROM task_stats')
+      .all() as Array<{ status: string; n: number }>
+    for (const row of rows) {
+      const count = Number(row.n) || 0
+      empty.total += count
+      if (row.status === 'completed') empty.completed = count
+      else if (row.status === 'failed') empty.failed = count
+      else if (row.status === 'running') empty.running = count
+      else if (row.status === 'queued') empty.queued = count
+      else if (row.status === 'cancelled') empty.cancelled = count
+    }
+    return empty
+  }
+
+  const whereSql = `WHERE ${whereClauses.join(' AND ')}`
+  const rows = getDb()
+    .prepare(`SELECT status, count(*) as count FROM download_tasks ${whereSql} GROUP BY status`)
+    .all(...params) as Array<{ status: string; count: number }>
+
+  const stats: TaskStats = { ...empty }
 
   for (const row of rows) {
     const count = Number(row.count) || 0
@@ -988,7 +1009,28 @@ export function cancelTask(id: string) {
   return getTask(id)!
 }
 
-export function batchCancelTasks(ids?: string[], opts?: { tab?: 'running'; filter?: TaskListFilter }) {
+/**
+ * 批量操作的单批条数。与删除路径的 200 条/批保持一致：
+ * 「全选」是跨分页的全量语义（筛选宽泛时几千条很常见），而取消/重试/换音质/换源
+ * 每条要 `getTask` + `UPDATE` + 若干 `unlink` + `emitTask(再 SELECT)` ≈ 4~5 次同步调用。
+ * 万级记录一口气跑完会把事件循环按住秒级 —— SSE 心跳推迟、进度不刷新、其他请求排队。
+ */
+const BATCH_OP_CHUNK_SIZE = 200
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+/** 分块执行，块间让出事件循环（`setImmediate`）。顺序与入参一致，回调内异常由调用方处理。 */
+async function forEachChunked<T>(items: T[], size: number, fn: (item: T) => void): Promise<void> {
+  for (let i = 0; i < items.length; i += size) {
+    const end = Math.min(i + size, items.length)
+    for (let j = i; j < end; j++) fn(items[j]!)
+    if (end < items.length) await yieldToEventLoop()
+  }
+}
+
+export async function batchCancelTasks(ids?: string[], opts?: { tab?: 'running'; filter?: TaskListFilter }) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
     targetIds.push(...ids)
@@ -996,14 +1038,14 @@ export function batchCancelTasks(ids?: string[], opts?: { tab?: 'running'; filte
     // 有筛选条件时只取消筛选内的任务，否则「全选」会把筛选外的运行中任务一起干掉
     targetIds.push(...resolveTaskIdsForTab('running', opts.filter))
   }
-  const items = []
-  for (const id of targetIds) {
+  const items: Array<ReturnType<typeof cancelTask> | { id: string; error: string }> = []
+  await forEachChunked(targetIds, BATCH_OP_CHUNK_SIZE, (id) => {
     try {
       items.push(cancelTask(id))
     } catch (e: any) {
       items.push({ id, error: e?.message || String(e) })
     }
-  }
+  })
   return { count: targetIds.length, items }
 }
 /** 删除任务记录；可选删除本地音频与歌词 */
@@ -1170,21 +1212,21 @@ export function switchQualityAndRetry(id: string, quality: string) {
   }
 }
 
-export function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean; tab?: 'failed'; filter?: TaskListFilter }) {
+export async function batchRetryTasks(ids?: string[], opts?: { resetAttempts?: boolean; tab?: 'failed'; filter?: TaskListFilter }) {
   const targetIds: string[] = []
   if (ids && ids.length > 0) {
     targetIds.push(...ids)
   } else if (opts?.tab === 'failed') {
     targetIds.push(...resolveTaskIdsForTab('failed', opts.filter))
   }
-  const items = []
-  for (const id of targetIds) {
+  const items: Array<ReturnType<typeof retryTask> | { id: string; error: string }> = []
+  await forEachChunked(targetIds, BATCH_OP_CHUNK_SIZE, (id) => {
     try {
       items.push(retryTask(id, opts))
     } catch (e: any) {
       items.push({ id, error: e?.message || String(e) })
     }
-  }
+  })
   kickWorker()
   return { count: targetIds.length, items }
 }
@@ -1195,7 +1237,7 @@ function resolveFailedTabTaskIds(ids?: string[], tab?: 'failed', filter?: TaskLi
   return []
 }
 
-export function batchSwitchQualityAndRetry(
+export async function batchSwitchQualityAndRetry(
   ids: string[],
   quality: string,
   opts?: { tab?: 'failed'; filter?: TaskListFilter },
@@ -1204,15 +1246,15 @@ export function batchSwitchQualityAndRetry(
     throw createError({ statusCode: 400, statusMessage: `不支持的音质: ${quality}` })
   }
   const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab, opts?.filter)
-  const items = []
-  for (const id of targetIds) {
+  const items: Array<ReturnType<typeof switchQualityAndRetry> | { id: string; error: string }> = []
+  await forEachChunked(targetIds, BATCH_OP_CHUNK_SIZE, (id) => {
     try {
       items.push(switchQualityAndRetry(id, quality))
     } catch (e: unknown) {
       const err = e as { statusMessage?: string; message?: string }
       items.push({ id, error: err?.statusMessage || err?.message || String(e) })
     }
-  }
+  })
   kickWorker()
   return { count: targetIds.length, quality, items }
 }
@@ -1290,13 +1332,13 @@ export function switchSourceAndRetry(id: string, opts?: { sourceId?: string }) {
 }
 
 /** 批量换源：可统一 sourceId，或按任务指定 sourceById；支持 allWithTab=failed 全选 */
-export function batchSwitchSourceAndRetry(
+export async function batchSwitchSourceAndRetry(
   ids: string[],
   opts?: { sourceId?: string; sourceById?: Record<string, string>; tab?: 'failed'; filter?: TaskListFilter },
 ) {
   const targetIds = ids.length ? ids : resolveFailedTabTaskIds(undefined, opts?.tab, opts?.filter)
-  const items = []
-  for (const id of targetIds) {
+  const items: Array<ReturnType<typeof switchSourceAndRetry> | { id: string; error: string }> = []
+  await forEachChunked(targetIds, BATCH_OP_CHUNK_SIZE, (id) => {
     try {
       const sourceId = opts?.sourceById?.[id] || opts?.sourceId
       items.push(switchSourceAndRetry(id, sourceId ? { sourceId } : undefined))
@@ -1304,7 +1346,7 @@ export function batchSwitchSourceAndRetry(
       const err = e as { statusMessage?: string; message?: string }
       items.push({ id, error: err?.statusMessage || err?.message || String(e) })
     }
-  }
+  })
   kickWorker()
   return { count: targetIds.length, items }
 }
@@ -2136,11 +2178,25 @@ export async function tickWorker() {
   }
 }
 
+/**
+ * 是否禁止「写入后自动唤醒 worker」。
+ *
+ * - 单测：批量操作/入队会 `kickWorker()`，而真实 worker 会立刻尝试联网下载，
+ *   断言结果就取决于时序（任务可能已被取走并失败）。设为 `1` 后只写库不唤醒，
+ *   需要真实处理的用例显式调用 `tickWorker()`。
+ * - 生产：等价于「本实例只提供 API、不跑下载」，是后续多实例/实例锁要用的形态。
+ */
+function isAutoKickDisabled() {
+  return process.env.MIYIN_DISABLE_WORKER === '1'
+}
+
 export function kickWorker() {
+  if (isAutoKickDisabled()) return
   void tickWorker()
 }
 
 export function startDownloadWorker() {
+  if (isAutoKickDisabled()) return
   // 服务启动或重启时，重置非活跃的孤儿 running 任务回 queued，防止重启残留导致假运行
   try {
     getDb()

@@ -20,10 +20,14 @@ describe('Queue tab-level pagination and batch operations', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'miyin-tab-test-'))
     process.env.DATA_DIR = tmpDir
     process.env.DOWNLOAD_DIR = tmpDir
+    // 批量操作现在是分块异步的，`await` 会让真实 worker 抢先去下载、把任务改成 failed。
+    // 这里只验证库内状态与作用域，不需要联网，关掉自动唤醒。
+    process.env.MIYIN_DISABLE_WORKER = '1'
     closeDb()
   })
 
   afterEach(() => {
+    delete process.env.MIYIN_DISABLE_WORKER
     closeDb()
     try {
       rmSync(tmpDir, { recursive: true, force: true })
@@ -69,12 +73,12 @@ describe('Queue tab-level pagination and batch operations', () => {
     expect(failedTab.map(t => t.status).sort()).toEqual(['cancelled', 'failed', 'failed'])
 
     // 测试批量全量操作
-    const retryRes = batchRetryTasks(undefined, { tab: 'failed' })
+    const retryRes = await batchRetryTasks(undefined, { tab: 'failed' })
     expect(retryRes.count).toBe(3)
     const afterRetryFailed = listTasks({ tab: 'failed' })
     expect(afterRetryFailed.length).toBe(0)
 
-    const cancelRes = batchCancelTasks(undefined, { tab: 'running' })
+    const cancelRes = await batchCancelTasks(undefined, { tab: 'running' })
     expect(cancelRes.count).toBe(8) // 5 + 3 重试入队的
 
     const deleteCompleted = await batchDeleteTasks(undefined, { tab: 'completed' })
