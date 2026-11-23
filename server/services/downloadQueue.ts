@@ -1912,11 +1912,20 @@ async function processTask(task: DownloadTaskRow) {
     const alts = fixedQuality
       ? []
       : listEnabledOkSources(task.platform).filter((s) => s.id !== task.source_id)
+    /**
+     * 能不能真的换到「另一个源」：
+     * - 固定音质时 alts 恒空（resolve 已轮询过全部音源，再换只是重复同一批请求）
+     * - 本地错误（目录不可写/只读）换源照样写不进同一块盘，重跑只会把「没权限」
+     *   重复 maxAttempts 次，还占着并发槽
+     * - 内容坏且候选表已探完（hasMore=false）时换源也没有新组合，放行只会空转到上限
+     */
+    const canSwitchSource =
+      !isPerm && !(isInvalidContent && !invalidHasMore) && alts.length > 0
     const nextStatus = nextStatusAfterFailure({
       attempts,
       maxAttempts: settings2.maxAttempts,
       autoFailover: settings2.autoFailover,
-      hasAltSource: alts.length > 0,
+      hasAltSource: canSwitchSource,
       retryable,
     })
     if (nextStatus === 'queued') {

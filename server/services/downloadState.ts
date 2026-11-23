@@ -50,8 +50,16 @@ export function isRetryableError(err: unknown): boolean {
 
 /**
  * 失败后下一状态：
- * - 可重试且未超次数：queued（有备源则换源，无备源也可同源重试）
- * - 否则 failed
+ * - `autoFailover` 关：一律 failed（连换源都不做，也就不该整轮重跑）
+ * - 次数用尽：failed
+ * - 同源可重试（网络/磁盘类）**或**还有别的源可换：queued
+ * - 其余（这个错换源也没用，且没有备源）：failed
+ *
+ * 注意 `hasAltSource` 是**独立**的放行条件，不能只挂在 `retryable` 上：
+ * 「未登录 / 该源无版权 / 直链 404」这类错误对该源是终态，对别的源未必是。
+ * 早期实现先 `if (!retryable) return 'failed'` 短路，`hasAltSource` 永远拿不到
+ * 控制权，等于「设置里开着失败自动换源，真到该换源时一步死」。轮次仍由
+ * `maxAttempts` 封顶，不会无界空转；本地错误（写入权限等）由调用方排除。
  */
 export function nextStatusAfterFailure(opts: {
   attempts: number
@@ -61,10 +69,8 @@ export function nextStatusAfterFailure(opts: {
   retryable?: boolean
 }): TaskStatus {
   const retryable = opts.retryable !== false
-  if (!retryable) return 'failed'
   if (!opts.autoFailover) return 'failed'
   if (opts.attempts >= opts.maxAttempts) return 'failed'
-  // 有备源或同源可重试（网络/磁盘类）都回队列
-  if (opts.hasAltSource || retryable) return 'queued'
+  if (retryable || opts.hasAltSource) return 'queued'
   return 'failed'
 }
