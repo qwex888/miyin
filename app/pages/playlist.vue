@@ -92,6 +92,14 @@ const loadingDetail = ref('')
 const loadingPercent = ref<number | null>(null)
 const abortControllerRef = ref<AbortController | null>(null)
 const cancelText = ref('取消')
+/**
+ * 预检 + 入队全程的进行中标记。
+ *
+ * 不能复用 `loading`：`loading` 在预检期间必须为 false（否则 PageLoading 会盖住
+ * 判重弹窗），但匹配确认弹窗的按钮又需要在预检期间禁用，否则连点会并发跑两次
+ * `checkDuplicates`，后一次覆盖 `dupResolver`，前一次返回的 Promise 永不 resolve。
+ */
+const enqueueing = ref(false)
 
 async function loadDefaults() {
   const s = await $fetch<{
@@ -319,6 +327,15 @@ async function prepareSelectedDownload() {
       }
     }
     confirmChoices.value = choices
+    /**
+     * 匹配流到这里已经结束，先把遮罩收尾。
+     *
+     * 不收尾的后果：#41 的第三个入口 —— 无论走「弹匹配确认」还是「直接入队」，
+     * 后续弹窗（MatchConfirmDialog / DuplicateReviewDialog 都是 z-index 100）
+     * 都会被匹配阶段的 PageLoading（z-index 200）压住，看起来像卡在「正在匹配曲目」。
+     * finally 里还会再置一次 false，幂等。
+     */
+    loading.value = false
     if (res.needConfirm > 0) {
       showConfirm.value = true
       toast.warning(`需确认 ${res.needConfirm} 首低分/未命中匹配（自动通过 ${res.autoOk}）`)
@@ -433,19 +450,23 @@ async function checkDuplicates(
 
 async function enqueueMatched(rows: MatchRow[]) {
   if (!preview.value) return
+  if (enqueueing.value) return
   const tracks = buildResolvedTracks(rows)
   if (!tracks.length) {
     toast.warning('没有可入队的曲目')
     return
   }
-  loadingText.value = '入队中…'
-  loading.value = true
+  enqueueing.value = true
   try {
-    // ①A：先预检，重复项交给聚合弹窗裁决
+    // ①A：先预检，重复项交给聚合弹窗裁决。
+    // 预检与裁决期间不能开 loading 遮罩：PageLoading（z-index 200）会盖住
+    // DuplicateReviewDialog（z-index 100）并吞掉所有点击，导致卡在「入队中…」
     const decisions = await checkDuplicates(
       tracks.map((t) => ({ title: t.title, artist: t.artist, album: t.album })),
     )
     if (decisions === null) return
+    loadingText.value = '入队中…'
+    loading.value = true
 
     const res = await $fetch<EnqueueResultPayload>('/api/playlist/enqueue', {
       method: 'POST',
@@ -464,6 +485,7 @@ async function enqueueMatched(rows: MatchRow[]) {
   } catch (e: unknown) {
     toast.error(apiErrorMessage(e, '入队失败'))
   } finally {
+    enqueueing.value = false
     loading.value = false
   }
 }
@@ -602,7 +624,7 @@ async function confirmAndEnqueue() {
       v-model:open="showConfirm"
       v-model:choices="confirmChoices"
       :rows="confirmPending"
-      :loading="loading"
+      :loading="enqueueing"
       @confirm="confirmAndEnqueue"
     />
 
