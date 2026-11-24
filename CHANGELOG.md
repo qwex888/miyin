@@ -11,6 +11,9 @@
 - 追加条目：`pnpm changelog:add <类型> "描述" [--author 用户名] [--pr 编号]`
 
 ## [Unreleased]
+
+## [0.5.4] - 2026-11-24
+
 ### Added
 
 - 新增 e2e/ 真实 UI 回归套件（Playwright）：PC + 移动端 109 条用例，覆盖搜索/入队/队列/音源/设置/水合/可访问性/鉴权，含真实下载落盘与 ffprobe 音频校验 (@qwex888)
@@ -349,7 +352,8 @@
 
 - 一期 MVP：鉴权、音源管理、平台搜索、试听、下载队列、歌单导入、Docker 与 FPK 骨架
 
-[Unreleased]: https://github.com/qwex888/miyin/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/qwex888/miyin/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/qwex888/miyin/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/qwex888/miyin/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/qwex888/miyin/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/qwex888/miyin/compare/v0.5.0...v0.5.1

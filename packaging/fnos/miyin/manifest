@@ -1,5 +1,5 @@
 appname=miyin
-version=0.5.3
+version=0.5.4
 display_name=觅音
 desc=多源音乐搜索、试听与下载助手（洛雪音源兼容）。支持 wy / tx / kg 歌单导入。
 platform=all
@@ -12,4 +12,4 @@ desktop_uidir=ui
 desktop_applaunchname=miyin.main
 install_dep_apps=nodejs_v22
 ctl_stop=true
-changelog=上游接口矩阵：各平台搜索声明主备多级通道，单接口失效自动降级；音源按实测表现排序：稳定交付高码率的音源优先尝试，常返回试听或谎报档位的自动靠后；下载队列「全选」右侧增加刷新按钮，可手动重新拉取当前分类的数据。
+changelog=新增 e2e/ 真实 UI 回归套件：PC + 移动端 109 条用例，覆盖搜索/入队/队列/音源/设置/水合/可访问性/鉴权，含真实下载落盘与 ffprobe 音频校验；整专下载新增「取消」按钮：拉取曲目或匹配入队过程中可随时中止，不再只能干等或刷新页面；登录与鉴权失败提示改由 message 承载，statusMessage 回归标准 reason p…
