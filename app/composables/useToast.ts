@@ -90,12 +90,19 @@ export function useToast() {
   }
 }
 
-/** 从 $fetch / ofetch 错误中提取可读文案 */
+/**
+ * 从 $fetch / ofetch 错误中提取可读文案。
+ *
+ * 顺序很关键：h3 的响应体是 `{ statusCode, statusMessage, message, data }`，
+ * 其中 `statusMessage` 会被 h3 清洗成 ASCII（未来默认行为），中文提示统一走 `message`。
+ * 而 ofetch 的 `FetchError.message` 是 `[POST] "...": 401 Unauthorized` 这类英文串，
+ * 不能排在前面，否则用户永远看不到中文提示。
+ */
 export function apiErrorMessage(err: unknown, fallback = '操作失败') {
   const e = err as any
   return (
-    e?.data?.statusMessage ||
     e?.data?.message ||
+    e?.data?.statusMessage ||
     e?.statusMessage ||
     e?.message ||
     fallback

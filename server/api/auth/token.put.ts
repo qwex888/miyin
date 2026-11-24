@@ -1,4 +1,5 @@
 import { changeAuthToken } from '~~/server/services/authTokenService'
+import { appError } from '~~/server/utils/appError'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ currentToken?: string; newToken?: string; confirmToken?: string }>(event)
@@ -7,7 +8,7 @@ export default defineEventHandler(async (event) => {
   const confirmToken = body?.confirmToken
 
   if (confirmToken !== undefined && String(confirmToken) !== newToken) {
-    throw createError({ statusCode: 400, statusMessage: '两次输入的新口令不一致' })
+    throw appError({ statusCode: 400, message: '两次输入的新口令不一致' })
   }
 
   return changeAuthToken({ currentToken, newToken })

@@ -3,6 +3,7 @@ import { isFnOsRuntime, getMiyinEnvPath, updateMiyinAuthToken } from '../utils/f
 import { getAuthTokenFromEnv } from '../utils/runtimeEnv'
 import { safeEqualString } from '../utils/crypto'
 import { isAuthRequired } from '../utils/authMode'
+import { appError } from '../utils/appError'
 
 const OVERRIDE_KEY = 'auth_token_override'
 
@@ -70,7 +71,7 @@ export function changeAuthToken(input: { currentToken: string; newToken: string 
   const next = String(input.newToken ?? '')
 
   if (!safeEqualString(currentInput, currentExpected)) {
-    throw createError({ statusCode: 401, statusMessage: '当前口令不正确' })
+    throw appError({ statusCode: 401, message: '当前口令不正确' })
   }
 
   if (safeEqualString(currentExpected, next) && getAuthTokenOverride() !== undefined) {
@@ -93,9 +94,8 @@ export function changeAuthToken(input: { currentToken: string; newToken: string 
       fnosSynced = true
     } catch (err: unknown) {
       // SQLite + 进程内已生效；env 同步失败不回滚，但告知调用方
-      const msg = (err as { statusMessage?: string; message?: string })?.statusMessage
-        || (err as Error)?.message
-        || String(err)
+      const errObj = err as { message?: string; statusMessage?: string }
+      const msg = errObj?.message || errObj?.statusMessage || String(err)
       return {
         ok: true,
         unchanged: false,

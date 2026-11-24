@@ -31,6 +31,7 @@ const sourceTab = ref<'url' | 'upload' | 'script'>('url')
 const url = ref('')
 const scriptText = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const drawerEl = ref<HTMLElement | null>(null)
 const pendingFile = ref<File | null>(null)
 const dragOver = ref(false)
 const originalScript = ref('')
@@ -98,6 +99,14 @@ function onCancel() {
   if (loading.value) return
   open.value = false
 }
+
+// Esc 关闭 + 焦点内聚：打开后落到名称输入框，Tab/Shift+Tab 在抽屉内循环，关闭后归还焦点。
+useFocusTrap({
+  container: drawerEl,
+  isOpen: () => open.value,
+  onEscape: onCancel,
+  initialFocus: () => drawerEl.value?.querySelector<HTMLInputElement>('input.input'),
+})
 
 function pickFile() {
   fileInput.value?.click()
@@ -341,8 +350,15 @@ async function doCheck() {
       @confirm="onBatchConfirm"
     />
     <div v-if="open" class="drawer-backdrop" @click.self="onCancel">
-      <div class="drawer form-drawer" role="dialog" aria-modal="true">
-        <h3>{{ mode === 'edit' ? '编辑音源' : '单个新增' }}</h3>
+      <div
+        ref="drawerEl"
+        class="drawer form-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="source-form-title"
+        tabindex="-1"
+      >
+        <h3 id="source-form-title">{{ mode === 'edit' ? '编辑音源' : '单个新增' }}</h3>
         <p class="muted">
           需要 Key 的音源请在「脚本」中按作者说明直接修改后保存。密钥只保存在本地脚本文件中。
         </p>

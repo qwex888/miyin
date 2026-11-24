@@ -3,6 +3,7 @@ import { isAuthRequired } from '../utils/authMode'
 import { getSessionSecret } from '../utils/runtimeEnv'
 import { relativeRequestPath } from '../utils/requestPath'
 import { getEffectiveAuthToken } from '../services/authTokenService'
+import { appError } from '../utils/appError'
 
 export default defineEventHandler((event) => {
   // 必须用「相对应用根」的路径：飞牛 baseURL 下 getRequestURL().pathname 带前缀，
@@ -22,7 +23,7 @@ export default defineEventHandler((event) => {
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined
   const session = verifySession(cookie || bearer, getSessionSecret())
   if (!session) {
-    throw createError({ statusCode: 401, statusMessage: '未登录或会话已过期' })
+    throw appError({ statusCode: 401, message: '未登录或会话已过期' })
   }
   event.context.auth = session
 })

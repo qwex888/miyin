@@ -67,7 +67,8 @@ miyin/
 ├── shared/               # Shared isomorphic TypeScript types, platform IDs, and constants
 ├── packaging/fnos/       # fnOS FPK build scripts, lifecycle hooks, manifest, socket entry
 ├── scripts/              # Release automation, changelog generation, brand rendering
-└── tests/                # Vitest unit and integration test suites
+├── tests/                # Vitest unit and integration test suites
+└── e2e/                  # Playwright end-to-end UI suite (real browser + real download; see e2e/README.md)
 ```
 
 ---
@@ -79,6 +80,7 @@ miyin/
 - **Start Dev Server**: `pnpm dev` (listens on `http://localhost:18980`)
 - **Run Typecheck / Prepare**: `pnpm postinstall` or `npx nuxt prepare`
 - **Run Tests**: `pnpm test` (executes `vitest run`)
+- **Run E2E (real UI)**: `pnpm build && pnpm test:e2e` — spawns an isolated instance from a DB snapshot, drives real Chrome on desktop + mobile viewports, verifies downloaded audio with ffprobe. See `e2e/README.md` for module list, selectors and reporting.
 - **Run Specific Test**: `pnpm vitest run tests/trackMatcher.test.ts`
 - **Run Tests in Watch Mode**: `pnpm vitest`
 - **Test Coverage**: `pnpm vitest run --coverage`
@@ -158,3 +160,15 @@ miyin/
   - Always call `resetSourceRuntimeState()` in `beforeEach`/`afterEach` hooks when testing source runtime scripts.
   - Reset or close database handles (`closeDb()`) between stateful integration test runs.
 - **Coverage**: All critical business logic (sandboxing, track matching, lyric decryption, download retry classification, audio sniffing) must maintain comprehensive test coverage across `tests/*.test.ts`.
+
+### End-to-End (real UI)
+
+`e2e/` is a separate Playwright suite, **not** part of `vitest run`. Use it before a release or after touching UI / download pipeline.
+
+- **Command**: `pnpm build && pnpm test:e2e` (add `--only=smoke` for a 15s sanity pass, `--profile=mobile`, `--headed`).
+- **Isolation**: it snapshots `data/miyin.sqlite` via `VACUUM INTO` into a temp dir, repoints `settings.app.downloadDir`, and never writes your real library.
+- **Case IDs** (`E2E-<MODULE>-<NN>`) and severities (`P0`/`P1`/`P2`) are stable across versions — use `report.json` to diff two runs.
+- **Selectors live only in `e2e/selectors.mjs`**. When UI markup changes, update that file first; do not inline new selectors in specs.
+- **Adding a case**: create `e2e/specs/NN-tag.mjs` exporting `meta` + default async function, follow the template in `e2e/README.md`. Each case asserts one thing and throws `new Error('期望 X，实际 Y')` on failure.
+- **When a case fails, classify it before "fixing"**: check whether the product or the test assumption is wrong. During this suite's development, 5 of 7 "suspected bugs" turned out to be wrong selectors or timing assumptions (virtual list rebuilds, overlay layers, exponential backoff intervals).
+- **Known traps**: row-scoped locators must be relative (`songRowCheckIn`); group tabs use `.tabs > .tab` with no `role=tab`; dialogs have an outer `.overlay` and an inner `[role=alertdialog]`; the audio-source drawer does not support Esc; song lists are virtualized.

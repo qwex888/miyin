@@ -2,6 +2,7 @@ import { createSessionToken, SESSION_MAX_AGE_SEC, safeEqualString } from '~~/ser
 import { isAuthRequired } from '~~/server/utils/authMode'
 import { getSessionSecret } from '~~/server/utils/runtimeEnv'
 import { getEffectiveAuthToken } from '~~/server/services/authTokenService'
+import { appError } from '~~/server/utils/appError'
 import {
   checkLoginAllowed,
   recordLoginFailure,
@@ -13,7 +14,7 @@ export default defineEventHandler(async (event) => {
   const expected = getEffectiveAuthToken()
 
   if (!isAuthRequired(expected)) {
-    throw createError({ statusCode: 400, statusMessage: '当前未启用口令鉴权' })
+    throw appError({ statusCode: 400, message: '当前未启用口令鉴权' })
   }
 
   // 按 socket 地址限流（不读 x-forwarded-for，避免伪造头绕过）。
@@ -22,9 +23,9 @@ export default defineEventHandler(async (event) => {
   const gate = checkLoginAllowed(ip)
   if (!gate.allowed) {
     setHeader(event, 'Retry-After', String(gate.retryAfterSec))
-    throw createError({
+    throw appError({
       statusCode: 429,
-      statusMessage: gate.locked
+      message: gate.locked
         ? `口令错误次数过多，请 ${Math.ceil(gate.retryAfterSec / 60)} 分钟后再试`
         : `尝试过于频繁，请 ${gate.retryAfterSec} 秒后再试`,
       data: { code: 'LOGIN_THROTTLED', retryAfterSec: gate.retryAfterSec, locked: gate.locked },
@@ -33,7 +34,7 @@ export default defineEventHandler(async (event) => {
 
   if (!body?.token || !safeEqualString(body.token, expected)) {
     recordLoginFailure(ip)
-    throw createError({ statusCode: 401, statusMessage: '口令错误' })
+    throw appError({ statusCode: 401, message: '口令错误' })
   }
 
   recordLoginSuccess(ip)

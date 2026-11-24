@@ -2,6 +2,7 @@ import { verifySession } from '~~/server/utils/crypto'
 import { isAuthRequired } from '~~/server/utils/authMode'
 import { getSessionSecret } from '~~/server/utils/runtimeEnv'
 import { getAuthTokenStatus, getEffectiveAuthToken } from '~~/server/services/authTokenService'
+import { appError } from '~~/server/utils/appError'
 
 export default defineEventHandler((event) => {
   const authToken = getEffectiveAuthToken()
@@ -23,7 +24,7 @@ export default defineEventHandler((event) => {
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined
   const session = verifySession(cookie || bearer, getSessionSecret())
   if (!session) {
-    throw createError({ statusCode: 401, statusMessage: '未登录或会话已过期' })
+    throw appError({ statusCode: 401, message: '未登录或会话已过期' })
   }
   return {
     ok: true,

@@ -6,6 +6,9 @@
 .cache
 dist
 
+# E2E 产物（截图/报告/服务日志，每次运行都会重新生成）
+/e2e/reports/
+
 # Node dependencies
 node_modules
 

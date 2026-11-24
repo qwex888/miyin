@@ -10,6 +10,8 @@
     "preview": "nuxt preview --port 18980",
     "postinstall": "nuxt prepare",
     "test": "vitest run",
+    "test:e2e": "node e2e/run.mjs",
+    "test:e2e:list": "node e2e/run.mjs --list",
     "changelog:add": "bash scripts/changelog-entry.sh",
     "download:fnpack": "node scripts/download-fnpack.mjs",
     "build:fpk": "bash packaging/fnos/scripts/build-fpk.sh",

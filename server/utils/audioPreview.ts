@@ -152,6 +152,17 @@ export type AudioProbeOutcome =
  * 相比"只取 duration"的查法，实测耗时与内存完全一致（ffprobe 只读文件头、不解码音频），
  * 所以要位深参数不必付出额外代价。
  */
+/**
+ * 探测结果里是否真有可用的音频参数。
+ *
+ * 只看 `codec_name` 不够：损坏/加密载荷（上游返回校验页或加密分片）会让 ffprobe 报
+ * `Header missing`，却仍打出 `codec_name=mp3 / sample_rate=0 / channels=0 / duration=N/A`。
+ * 这种「有 codec 名、无任何可用参数」必须当作没有音频流，否则上层的内容硬校验会被跳过。
+ */
+export function isUsableAudioInfo(info: AudioProbeInfo): boolean {
+  return info.durationSec != null || (info.sampleRate ?? 0) > 0 || (info.channels ?? 0) > 0
+}
+
 export function probeAudioContent(filePath: string): Promise<AudioProbeOutcome> {
   if (!existsSync(filePath)) return Promise.resolve({ kind: 'unavailable' })
   return new Promise((resolve) => {
@@ -202,12 +213,9 @@ export function probeAudioContent(filePath: string): Promise<AudioProbeOutcome> 
         return
       }
       const info = parseFfprobeAudioInfo(out)
-      // 一个字段都没解析到 → ffprobe 确实看过了但没找到音频流
-      resolve(
-        info.durationSec == null && info.codec == null
-          ? { kind: 'not-audio' }
-          : { kind: 'ok', info },
-      )
+      // 判定「真的解析出了音频」：时长、采样率、声道数至少有一项可信。
+      // 只认 codec_name 不够（见 isUsableAudioInfo 的说明）。
+      resolve(isUsableAudioInfo(info) ? { kind: 'ok', info } : { kind: 'not-audio' })
     })
   })
 }
